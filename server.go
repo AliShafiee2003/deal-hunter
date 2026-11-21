@@ -8,7 +8,6 @@ import (
 	"html/template"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"os/exec"
@@ -279,17 +278,12 @@ type ServerState struct {
 }
 
 func NewServerState(intervalSec int, lat, lng string) *ServerState {
+	// Ultra-low latency Transport dedicated 100% to SnappShop
 	tr := &http.Transport{
-		MaxIdleConns:        120,
-		MaxIdleConnsPerHost: 30,
-		IdleConnTimeout:     90 * time.Second,
-	}
-
-	dkJar, _ := cookiejar.New(nil)
-	dkTr := &http.Transport{
-		MaxIdleConns:        120,
-		MaxIdleConnsPerHost: 30,
-		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConns:        40,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     120 * time.Second,
+		DisableCompression: false,
 	}
 
 	return &ServerState{
@@ -297,8 +291,8 @@ func NewServerState(intervalSec int, lat, lng string) *ServerState {
 		intervalSec:      intervalSec,
 		lat:              lat,
 		lng:              lng,
-		snappClient:      &http.Client{Transport: tr, Timeout: 12 * time.Second},
-		dkClient:         &http.Client{Transport: dkTr, Jar: dkJar, Timeout: 12 * time.Second},
+		snappClient:      &http.Client{Transport: tr, Timeout: 8 * time.Second},
+		dkClient:         nil, // Digikala resources released per user instruction
 		s26SniperActive:  false,
 		s26IsTurbo:       false,
 		s26StatusDesc:    "در انتظار شروع در ساعت ۲۱:۲۳",
