@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fast Buy 1-Click for SnappShop (Complete Auto-Checkout to Bank Gateway)
 // @namespace    https://snappshop.ir/
-// @version      4.2
-// @description  اسنایپر هوشمند Galaxy S26: رصد خودکار لیست کالاها و لیزی‌لود (Product-List)، افزودن به سبد، ثبت سفارش، انتخاب سریعترین ارسال و اتصال مستقیم به درگاه بانکی
+// @version      4.3
+// @description  اسنایپر هوشمند Galaxy S26: رصد خودکار لیست کالاها با اسکرول لیزی‌لود و رفرش هوشمند در ۲۱:۳۰، افزودن خودکار به سبد، ثبت سفارش، انتخاب سریعترین ارسال و اتصال مستقیم به درگاه بانکی
 // @match        https://snappshop.ir/*
 // @match        https://www.snappshop.ir/*
 // @run-at       document-start
@@ -43,10 +43,10 @@
     // -------------------------------------------------------------------------
     // Banner UI
     // -------------------------------------------------------------------------
-    const themeColor = 'linear-gradient(90deg, #dc2626, #b91c1c)';
+    const defaultTheme = 'linear-gradient(90deg, #dc2626, #b91c1c)';
 
     function showBanner(message, bgColor) {
-        bgColor = bgColor || themeColor;
+        bgColor = bgColor || defaultTheme;
         let banner = document.getElementById('fast-buy-banner');
         if (!banner) {
             banner = document.createElement('div');
@@ -101,12 +101,27 @@
     }
 
     // =========================================================================
-    // مرحله ۰: پایش ویژه لیست محصولات و رویدادها (مانند Doe3z0) با پشتیبانی Lazy Loading
+    // مرحله ۰: پایش ویژه لیست محصولات (product-list/Doe3z0)
+    // اسکرول هوشمند برای Lazy-Load + رفرش خودکار در بازه ۲۱:۳۰ تا ۲۱:۳۱
     // =========================================================================
     if (isProductListPage) {
-        showBanner('پایش آنی لیست کالاها و لیزی‌لود برای Galaxy S26 فعال است...');
-
         let s26Found = false;
+        const pageLoadTs = Date.now();
+        let scrollStep = 0;
+
+        function getTiming() {
+            const now = new Date();
+            const h = now.getHours();
+            const m = now.getMinutes();
+            const s = now.getSeconds();
+            const totalMins = h * 60 + m;
+
+            const isWindow = (totalMins >= 1283 && totalMins < 1300); // 21:23 - 21:40
+            const isTurbo = (h === 21 && (m === 30 || m === 31));   // 21:30 - 21:31
+
+            return { h, m, s, isWindow, isTurbo };
+        }
+
         function scanProductCards() {
             if (s26Found) return;
             const cards = Array.from(document.querySelectorAll('a[href*="/product/snp-"]'));
@@ -117,7 +132,6 @@
                 const title = titleEl.textContent || '';
 
                 if (isMatchingS26(title, text)) {
-                    // Extract price numbers
                     const normText = normalizeDigits(text).replace(/,/g, '');
                     const priceMatches = normText.match(/\d{7,10}/g);
                     let validPrice = false;
@@ -126,7 +140,6 @@
                         for (const pStr of priceMatches) {
                             let p = parseInt(pStr, 10);
                             if (p > 100000000) p = p / 10;
-                            // Check 20M to 30M Toman
                             if (p >= 20000000 && p <= 30000000) {
                                 validPrice = true;
                                 break;
@@ -134,11 +147,10 @@
                         }
                     }
 
-                    // If matches S26 and within 20M-30M Toman (or specifically 26M)
                     if (validPrice || /26\s*000\s*000|۲۶\s*۰۰۰\s*۰۰۰/.test(text)) {
                         s26Found = true;
                         playAlertSound(1500);
-                        showBanner('🚨 گلکسی S26 شناسایی شد! انتقال فوری به فرآیند خرید...');
+                        showBanner('🚨 گلکسی S26 پیدا شد! ورود فوری به چرخه خرید سریع...');
 
                         let targetHref = card.getAttribute('href') || '';
                         if (!targetHref.startsWith('http')) {
@@ -152,9 +164,50 @@
             }
         }
 
-        const scanIv = setInterval(scanProductCards, 60);
+        const scanIv = setInterval(scanProductCards, 50);
         new MutationObserver(scanProductCards).observe(document.documentElement, { childList: true, subtree: true });
         window.addEventListener('scroll', scanProductCards, { passive: true });
+
+        // اتوماسیون اسکرول و رفرش
+        function automateListPage() {
+            if (s26Found) return;
+            const timing = getTiming();
+
+            // قبل از بازه ۲۱:۲۳: وضعیت آماده‌باش
+            if (!timing.isWindow) {
+                if (timing.h < 21 || (timing.h === 21 && timing.m < 23)) {
+                    const rem = (22 - timing.m);
+                    showBanner(`⏳ اسنایپر صفحه: در انتظار ساعت ۲۱:۲۳ (حدود ${rem} دقیقه دیگر)...`, 'linear-gradient(90deg, #d97706, #b45309)');
+                }
+                return;
+            }
+
+            // بازه فعال (۲۱:۲۳ تا ۲۱:۴۰)
+            if (timing.isTurbo) {
+                showBanner(`⚡⚡ بازه توربو ۲۱:۳۰ فعال است! اسکرول مداوم و رفرش خودکار هر ۵ ثانیه...`, 'linear-gradient(90deg, #dc2626, #7f1d1d)');
+            } else {
+                showBanner(`🔥 اسنایپر فعال (۲۱:۲۳ تا ۲۱:۴۰): اسکرول خودکار لیزی‌لود و رفرش هر ۱۰ ثانیه...`);
+            }
+
+            // ۱. اسکرول مرحله‌ای به پایین برای تحریک لود کالاهای جدید
+            scrollStep++;
+            const scrollPositions = [800, 1800, 3200, 5000, document.body.scrollHeight];
+            const targetY = scrollPositions[scrollStep % scrollPositions.length] || document.body.scrollHeight;
+            window.scrollTo({ top: targetY, behavior: 'smooth' });
+
+            // ۲. بررسی زمان رفرش صفحه
+            const elapsed = Date.now() - pageLoadTs;
+            const reloadLimit = timing.isTurbo ? 5000 : 10000; // توربو ۵ ثانیه، حالت عادی ۱۰ ثانیه
+
+            if (elapsed >= reloadLimit) {
+                scanProductCards();
+                if (!s26Found) {
+                    window.location.reload();
+                }
+            }
+        }
+
+        setInterval(automateListPage, 1200);
     }
 
     // =========================================================================
