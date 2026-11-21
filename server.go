@@ -275,6 +275,7 @@ type ServerState struct {
 	s26FoundDeals    []DealItem
 	s26TriggeredURLs map[string]bool
 	s26MaxPriceToman int64
+	s26PendingURL    string // URL waiting to be opened in browser (polled by dashboard JS)
 }
 
 func NewServerState(intervalSec int, lat, lng string) *ServerState {
@@ -299,6 +300,7 @@ func NewServerState(intervalSec int, lat, lng string) *ServerState {
 		s26FoundDeals:    make([]DealItem, 0),
 		s26TriggeredURLs: make(map[string]bool),
 		s26MaxPriceToman: 30000000,
+		s26PendingURL:    "",
 	}
 }
 
@@ -1094,12 +1096,14 @@ func (s *ServerState) TriggerS26Sniper(deal DealItem) {
 	fmt.Printf("📦 عنوان: %s\n", deal.Title)
 	fmt.Printf("💰 قیمت: %s تومان\n", deal.PriceFormatted)
 	fmt.Printf("🔗 لینک خرید سریع: %s\n", deal.FastBuyURL)
-	fmt.Println("⚡ در حال باز کردن فوری مرورگر و افزودن به سبد خرید...")
+	fmt.Println("⚡ URL در داشبورد قرار گرفت — مرورگر Antigravity خودکار باز می‌کند...")
 	fmt.Println("=======================================================\n")
 
-	if runtime.GOOS == "windows" {
-		exec.Command("cmd", "/c", "start", deal.FastBuyURL).Start()
-	}
+	// Store URL for dashboard JS polling — the Antigravity browser will open it via window.open()
+	// This avoids using the system default browser (exec.Command "start")
+	s.mu.Lock()
+	s.s26PendingURL = deal.FastBuyURL
+	s.mu.Unlock()
 
 	go func() {
 		for i := 0; i < 5; i++ {
@@ -2163,6 +2167,20 @@ const indexHTML = `<!DOCTYPE html>
                         badge.innerText = cnt.toLocaleString();
                     });
                 }
+                // 🎯 S26 Sniper: open product tab in THIS browser when server detects a match
+                if (data.s26_pending_url && data.s26_pending_url !== '') {
+                    // Pop the URL from server immediately so we don't open twice
+                    fetch('/api/sniper/pop-url').catch(() => {});
+                    // Open in a new tab within Antigravity's built-in browser
+                    const sniperTab = window.open(data.s26_pending_url, '_blank');
+                    if (!sniperTab) {
+                        // Fallback: navigate current tab if popup was blocked
+                        window.location.href = data.s26_pending_url;
+                    }
+                    // Flash the page background red as an alert
+                    document.body.style.background = '#dc2626';
+                    setTimeout(() => { document.body.style.background = ''; }, 800);
+                }
             } catch (err) {
                 console.error("Status update error:", err);
             }
@@ -2515,6 +2533,20 @@ func main() {
 			"s26_scan_count":    state.s26ScanCount,
 			"s26_last_scan":     state.s26LastScanTime.Format("15:04:05"),
 			"s26_found_count":   len(state.s26FoundDeals),
+			"s26_pending_url":   state.s26PendingURL,
+		})
+	})
+
+	// Pop pending sniper URL — called by dashboard JS after opening the tab
+	http.HandleFunc("/api/sniper/pop-url", func(w http.ResponseWriter, r *http.Request) {
+		state.mu.Lock()
+		url := state.s26PendingURL
+		state.s26PendingURL = ""
+		state.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"url": url,
 		})
 	})
 
