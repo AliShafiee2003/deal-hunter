@@ -1,0 +1,21 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Cache and large data files
+deals_cache.json
+*.json
+!package.json
+
+# Temporary / probe outputs
+*.log
+*.txt
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
