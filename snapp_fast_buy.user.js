@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fast Buy 1-Click for SnappShop (Complete Auto-Checkout to Bank Gateway)
 // @namespace    https://snappshop.ir/
-// @version      4.3
-// @description  اسنایپر هوشمند Galaxy S26: رصد خودکار لیست کالاها با اسکرول لیزی‌لود و رفرش هوشمند در ۲۱:۳۰، افزودن خودکار به سبد، ثبت سفارش، انتخاب سریعترین ارسال و اتصال مستقیم به درگاه بانکی
+// @version      4.4
+// @description  اسنایپر هوشمند Galaxy S26: رصد مداوم و پیوسته لیست کالاها با اسکرول لیزی‌لود و رفرش هر ۱۰ ثانیه، افزودن خودکار به سبد، ثبت سفارش، انتخاب سریعترین ارسال و اتصال مستقیم به درگاه بانکی
 // @match        https://snappshop.ir/*
 // @match        https://www.snappshop.ir/*
 // @run-at       document-start
@@ -65,7 +65,7 @@
     function normalizeDigits(str) {
         return (str || '')
             .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
-            .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+            .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧۸۹'.indexOf(d));
     }
 
     // -------------------------------------------------------------------------
@@ -102,25 +102,12 @@
 
     // =========================================================================
     // مرحله ۰: پایش ویژه لیست محصولات (product-list/Doe3z0)
-    // اسکرول هوشمند برای Lazy-Load + رفرش خودکار در بازه ۲۱:۳۰ تا ۲۱:۳۱
+    // اسکرول مداوم برای Lazy-Load + رفرش خودکار هر ۱۰ ثانیه (پیوسته و نامحدود)
     // =========================================================================
     if (isProductListPage) {
         let s26Found = false;
         const pageLoadTs = Date.now();
         let scrollStep = 0;
-
-        function getTiming() {
-            const now = new Date();
-            const h = now.getHours();
-            const m = now.getMinutes();
-            const s = now.getSeconds();
-            const totalMins = h * 60 + m;
-
-            const isWindow = (totalMins >= 1283 && totalMins < 1300); // 21:23 - 21:40
-            const isTurbo = (h === 21 && (m === 30 || m === 31));   // 21:30 - 21:31
-
-            return { h, m, s, isWindow, isTurbo };
-        }
 
         function scanProductCards() {
             if (s26Found) return;
@@ -168,26 +155,11 @@
         new MutationObserver(scanProductCards).observe(document.documentElement, { childList: true, subtree: true });
         window.addEventListener('scroll', scanProductCards, { passive: true });
 
-        // اتوماسیون اسکرول و رفرش
+        // اتوماسیون مداوم اسکرول و رفرش هر ۱۰ ثانیه
         function automateListPage() {
             if (s26Found) return;
-            const timing = getTiming();
 
-            // قبل از بازه ۲۱:۲۳: وضعیت آماده‌باش
-            if (!timing.isWindow) {
-                if (timing.h < 21 || (timing.h === 21 && timing.m < 23)) {
-                    const rem = (22 - timing.m);
-                    showBanner(`⏳ اسنایپر صفحه: در انتظار ساعت ۲۱:۲۳ (حدود ${rem} دقیقه دیگر)...`, 'linear-gradient(90deg, #d97706, #b45309)');
-                }
-                return;
-            }
-
-            // بازه فعال (۲۱:۲۳ تا ۲۱:۴۰)
-            if (timing.isTurbo) {
-                showBanner(`⚡⚡ بازه توربو ۲۱:۳۰ فعال است! اسکرول مداوم و رفرش خودکار هر ۵ ثانیه...`, 'linear-gradient(90deg, #dc2626, #7f1d1d)');
-            } else {
-                showBanner(`🔥 اسنایپر فعال (۲۱:۲۳ تا ۲۱:۴۰): اسکرول خودکار لیزی‌لود و رفرش هر ۱۰ ثانیه...`);
-            }
+            showBanner(`🔥 اسنایپر مداوم فعال است: اسکرول لیزی‌لود و رفرش هر ۱۰ ثانیه تا دستور توقف...`);
 
             // ۱. اسکرول مرحله‌ای به پایین برای تحریک لود کالاهای جدید
             scrollStep++;
@@ -195,11 +167,9 @@
             const targetY = scrollPositions[scrollStep % scrollPositions.length] || document.body.scrollHeight;
             window.scrollTo({ top: targetY, behavior: 'smooth' });
 
-            // ۲. بررسی زمان رفرش صفحه
+            // ۲. رفرش صفحه هر ۱۰ ثانیه برای دریافت کالاهای تازه اضافه‌شده
             const elapsed = Date.now() - pageLoadTs;
-            const reloadLimit = timing.isTurbo ? 5000 : 10000; // توربو ۵ ثانیه، حالت عادی ۱۰ ثانیه
-
-            if (elapsed >= reloadLimit) {
+            if (elapsed >= 10000) {
                 scanProductCards();
                 if (!s26Found) {
                     window.location.reload();

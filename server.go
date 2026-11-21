@@ -293,10 +293,10 @@ func NewServerState(intervalSec int, lat, lng string) *ServerState {
 		lat:              lat,
 		lng:              lng,
 		snappClient:      &http.Client{Transport: tr, Timeout: 8 * time.Second},
-		dkClient:         nil, // Digikala resources released per user instruction
-		s26SniperActive:  false,
+		dkClient:         &http.Client{Transport: tr, Timeout: 8 * time.Second},
+		s26SniperActive:  true,
 		s26IsTurbo:       false,
-		s26StatusDesc:    "در انتظار شروع در ساعت ۲۱:۲۳",
+		s26StatusDesc:    "🔥 پایش مداوم و پیوسته Galaxy S26 فعال است (هر ۱۰ ثانیه)",
 		s26FoundDeals:    make([]DealItem, 0),
 		s26TriggeredURLs: make(map[string]bool),
 		s26MaxPriceToman: 30000000,
@@ -572,6 +572,9 @@ func (s *ServerState) fetchDkEndpoint(baseURL string, target CrawlTarget, maxPag
 		req.Header.Set("x-web-client", "desktop")
 		req.Header.Set("x-web-client-id", "web")
 
+		if s.dkClient == nil {
+			break
+		}
 		resp, err := s.dkClient.Do(req)
 		if err != nil {
 			break
@@ -872,63 +875,18 @@ func IsGalaxyS26Phone(title string, priceToman int64) bool {
 	return matched
 }
 
-func GetCurrentS26Interval(now time.Time) (active bool, isTurbo bool, interval time.Duration, statusText string) {
-	h := now.Hour()
-	m := now.Minute()
-	s := now.Second()
-	currentSec := h*3600 + m*60 + s
-
-	startSec := 21*3600 + 23*60      // 21:23:00
-	endSec := 21*3600 + 40*60        // 21:40:00
-	turboStartSec := 21*3600 + 30*60 // 21:30:00
-	turboEndSec := 21*3600 + 31*60   // 21:31:00
-
-	if currentSec < startSec {
-		remSec := startSec - currentSec
-		remH := remSec / 3600
-		remM := (remSec % 3600) / 60
-		remS := remSec % 60
-		return false, false, 0, fmt.Sprintf("در انتظار شروع در ساعت ۲۱:۲۳ (باقی‌مانده: %02d:%02d:%02d)", remH, remM, remS)
-	}
-
-	if currentSec >= endSec {
-		return false, false, 0, "پایان بازه زمانی پایش (ساعت ۲۱:۴۰) - متوقف شد"
-	}
-
-	// Inside 21:30 to 21:31
-	if currentSec >= turboStartSec && currentSec < turboEndSec {
-		return true, true, 5 * time.Second, "⚡ حالت توربو ماکزیمم (هر ۵ ثانیه - تا ۲۱:۳۱)"
-	}
-
-	return true, false, 10 * time.Second, "🔥 در حال پایش فعال و سریع (هر ۱۰ ثانیه - تا ۲۱:۴۰)"
-}
-
 func (s *ServerState) StartS26Sniper() {
 	go func() {
-		fmt.Println("🎯 [S26 Sniper] Scheduled monitor initialized: Standby until 21:23:00. Active 21:23-21:40 (10s), Turbo 21:30-21:31 (5s).")
-		lastPrintedMin := -1
+		fmt.Println("🎯 [S26 Sniper] Continuous monitor active: Scanning every 10 seconds until manually stopped.")
 		for {
-			now := time.Now()
-			active, isTurbo, interval, status := GetCurrentS26Interval(now)
-
 			s.mu.Lock()
-			s.s26StatusDesc = status
-			s.s26SniperActive = active
-			s.s26IsTurbo = isTurbo
+			s.s26StatusDesc = "🔥 پایش مداوم و پیوسته Galaxy S26 فعال است (هر ۱۰ ثانیه)"
+			s.s26SniperActive = true
+			s.s26IsTurbo = false
 			s.mu.Unlock()
 
-			if !active {
-				if now.Minute() != lastPrintedMin && now.Minute()%5 == 0 {
-					lastPrintedMin = now.Minute()
-					fmt.Printf("⏳ [S26 Sniper Standby] %s (زمان فعلی سیستم: %s)\n", status, now.Format("15:04:05"))
-				}
-				time.Sleep(1 * time.Second)
-				continue
-			}
-
-			// ACTIVE WINDOW (21:23 to 21:40)!
 			s.ScanForGalaxyS26()
-			time.Sleep(interval)
+			time.Sleep(10 * time.Second)
 		}
 	}()
 }
