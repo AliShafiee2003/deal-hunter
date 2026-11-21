@@ -804,24 +804,36 @@ func (s *ServerState) RunScan() {
 
 // --- Galaxy S26 Dedicated Sniper Engine ---
 
-// IsGalaxyS26Phone determines whether a product is a genuine Samsung Galaxy S26 phone under 30 million Tomans.
-func IsGalaxyS26Phone(title string, priceToman int64) bool {
-	titleLower := strings.ToLower(title)
+var persianDigitReplacer = strings.NewReplacer(
+	"۰", "0", "۱", "1", "۲", "2", "۳", "3", "۴", "4",
+	"۵", "5", "۶", "6", "۷", "7", "۸", "8", "۹", "9",
+	"٠", "0", "١", "1", "٢", "2", "٣", "3", "٤", "4",
+	"٥", "5", "٦", "6", "٧", "7", "٨", "8", "٩", "9",
+)
 
-	// 1. Price check: Under 30,000,000 Toman, and above 3,000,000 Toman (sanity floor)
+func NormalizePersianDigits(s string) string {
+	return persianDigitReplacer.Replace(s)
+}
+
+// IsGalaxyS26Phone determines whether a product is a genuine Samsung Galaxy S26 phone between 20M and 30M Tomans (e.g. 26M).
+func IsGalaxyS26Phone(title string, priceToman int64) bool {
+	// 1. Price check: Must be > 20,000,000 Toman and <= 30,000,000 Toman (specifically checks 26,000,000)
 	actualToman := priceToman
 	if actualToman > 100000000 {
 		actualToman = actualToman / 10
 	}
-	if actualToman > 30000000 || actualToman < 3000000 {
+	if actualToman < 20000000 || actualToman > 30000000 {
 		return false
 	}
 
+	norm := NormalizePersianDigits(title)
+	normLower := strings.ToLower(norm)
+
 	// 2. Reject accessories
-	if strings.Contains(title, "مناسب") {
+	if strings.Contains(norm, "مناسب") {
 		return false
 	}
-	words := strings.Fields(title)
+	words := strings.Fields(norm)
 	if len(words) > 0 {
 		firstWord := words[0]
 		for _, acc := range []string{"کاور", "قاب", "گلس", "محافظ", "کیف", "بند", "شارژر", "کابل", "برچسب", "هولدر", "پایه", "لنز"} {
@@ -834,7 +846,7 @@ func IsGalaxyS26Phone(title string, priceToman int64) bool {
 	// 3. Must be a phone: contains "گوشی" or "موبایل" or "phone" or "smartphone"
 	isPhone := false
 	for _, pw := range []string{"گوشی", "موبایل", "phone", "smartphone"} {
-		if strings.Contains(titleLower, pw) {
+		if strings.Contains(normLower, pw) {
 			isPhone = true
 			break
 		}
@@ -846,7 +858,7 @@ func IsGalaxyS26Phone(title string, priceToman int64) bool {
 	// 4. Must relate to Samsung or Galaxy
 	hasBrand := false
 	for _, b := range []string{"samsung", "galaxy", "سامسونگ", "گلکسی"} {
-		if strings.Contains(titleLower, b) {
+		if strings.Contains(normLower, b) {
 			hasBrand = true
 			break
 		}
@@ -855,15 +867,15 @@ func IsGalaxyS26Phone(title string, priceToman int64) bool {
 		return false
 	}
 
-	// 5. Match S26 model in English or Persian (s26, s-26, s 26, اس ۲۶, اس26, اس 26)
-	matched, _ := regexp.MatchString(`(?i)(?:\bs[- ]?26\b|اس\s*[۲2][۶6]|s\s*26)`, title)
+	// 5. Match S26 model in English or Persian (s26, s-26, s 26, اس 26) - digits normalized so Persian S۲۶ is also matched!
+	matched, _ := regexp.MatchString(`(?i)(?:\bs[- ]?26\b|اس\s*26|s\s*26)`, normLower)
 	return matched
 }
 
 func (s *ServerState) StartS26Sniper() {
 	go func() {
 		time.Sleep(2 * time.Second)
-		fmt.Println("🎯 [S26 Sniper] Dedicated Galaxy S26 background monitor started (interval: 15s, max price: 30M Toman)...")
+		fmt.Println("🎯 [S26 Sniper] Dedicated Galaxy S26 background monitor started (interval: 15s, target price: 20M - 30M Toman, e.g. 26M)...")
 		for {
 			s.ScanForGalaxyS26()
 			time.Sleep(15 * time.Second)
@@ -874,10 +886,15 @@ func (s *ServerState) StartS26Sniper() {
 func (s *ServerState) ScanForGalaxyS26() {
 	queries := []string{
 		"galaxy s26",
+		"galaxy s۲۶",
 		"گلکسی s26",
+		"گلکسی s۲۶",
 		"سامسونگ s26",
+		"سامسونگ s۲۶",
 		"s26",
+		"s۲۶",
 		"گوشی s26",
+		"گوشی s۲۶",
 	}
 
 	s.mu.Lock()
@@ -887,7 +904,7 @@ func (s *ServerState) ScanForGalaxyS26() {
 
 	for _, q := range queries {
 		s.searchSnappForS26(q, false)
-		time.Sleep(400 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 	}
 }
 
@@ -1861,21 +1878,21 @@ const indexHTML = `<!DOCTYPE html>
         <!-- Userscript Banner -->
         <div class="banner-fastbuy">
             <div class="banner-fastbuy-text">
-                <strong>⚡ قابلیت خرید ۱-کلیکه (انتقال مستقیم به صفحه Shipping):</strong>
-                اسکریپت تمپرمونکی برای اسنپ‌شاپ و دیجی‌کالا فعال شد! با کلیک روی هر دکمه، کالا خودکار به سبد اضافه و مستقیماً به صفحه انتخاب آدرس می‌رود.
+                <strong>⚡ قابلیت خرید خودکار تا درگاه بانکی:</strong>
+                اسکریپت تمپرمونکی نسخه ۳.۰ فعال شد! به صورت کاملاً خودکار کالا به سبد اضافه شده، ثبت سفارش زده می‌شود، اولین روز و ساعت فعال ارسال انتخاب و تایید می‌گردد و مستقیماً به درگاه پرداخت بانک منتقل می‌شوید.
             </div>
             <a href="/snapp_fast_buy.user.js" target="_blank" class="btn-script">
-                📥 نصب / آپدیت اسکریپت خرید ۱-کلیکه (نسخه ۲.۵ مجهز به اسنایپر S26)
+                📥 نصب / آپدیت اسکریپت خرید ۱-کلیکه (نسخه ۳.۰ مجهز به توالی کامل تا درگاه بانک)
             </a>
         </div>
 
         <!-- Galaxy S26 Dedicated Sniper Box -->
         <div class="banner-sniper">
             <div class="sniper-left">
-                <div class="sniper-badge-pulse">🎯 اسنایپر هوشمند Galaxy S26</div>
+                <div class="sniper-badge-pulse">🎯 اسنایپر هوشمند Galaxy S26 / S۲۶</div>
                 <div class="sniper-info">
-                    <strong>پایش اختصاصی اسنپ‌شاپ برای گوشی سامسونگ Galaxy S26 (عادی / پلاس / اولترا):</strong>
-                    <span>فرکانس: هر ۱۵ ثانیه | شرط خودکار: <strong>قیمت زیر ۳۰,۰۰۰,۰۰۰ تومان</strong> | اقدام: باز کردن فوری مرورگر، افزودن خودکار به سبد و انتقال به شیپینگ + آلارم صوتی</span>
+                    <strong>پایش اختصاصی اسنپ‌شاپ برای گوشی سامسونگ Galaxy S26 (شامل عدد فارسی S۲۶):</strong>
+                    <span>فرکانس: هر ۱۵ ثانیه | شرط خودکار: <strong>قیمت بالای ۲۰ و زیر ۳۰ میلیون تومان (به‌ویژه ۲۶ میلیون)</strong> | عملکرد: باز کردن تب جدید + افزودن به سبد + انتخاب روز و ساعت ارسال + انتقال مستقیم به درگاه بانکی + آلارم صوتی</span>
                 </div>
             </div>
             <div class="sniper-actions">
@@ -2432,9 +2449,9 @@ func main() {
 			ID:             "snp_test_s26",
 			Store:          "snapp",
 			StoreName:      "اسنپ‌شاپ",
-			Title:          "گوشی موبایل سامسونگ مدل Galaxy S26 Ultra دو سیم کارت ظرفیت 256 گیگابایت (تست اسنایپر)",
-			PriceToman:     28500000,
-			PriceFormatted: "28,500,000",
+			Title:          "گوشی موبایل سامسونگ مدل galaxy S۲۶ دو سیم کارت ظرفیت 256 گیگابایت (تست اسنایپر)",
+			PriceToman:     26000000,
+			PriceFormatted: "26,000,000",
 			ProductURL:     "https://snappshop.ir/product/snp-533616199",
 			FastBuyURL:     "https://snappshop.ir/product/snp-533616199?quick_buy=1&sniper=s26",
 			ImageURL:       "https://snappshop.ir/assets/images/placeholder.png",
