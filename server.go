@@ -269,6 +269,8 @@ type ServerState struct {
 	snapp429         int64
 	dkClient         *http.Client
 	s26SniperActive  bool
+	s26IsTurbo       bool
+	s26StatusDesc    string
 	s26LastScanTime  time.Time
 	s26ScanCount     int64
 	s26FoundDeals    []DealItem
@@ -297,7 +299,9 @@ func NewServerState(intervalSec int, lat, lng string) *ServerState {
 		lng:              lng,
 		snappClient:      &http.Client{Transport: tr, Timeout: 12 * time.Second},
 		dkClient:         &http.Client{Transport: dkTr, Jar: dkJar, Timeout: 12 * time.Second},
-		s26SniperActive:  true,
+		s26SniperActive:  false,
+		s26IsTurbo:       false,
+		s26StatusDesc:    "در انتظار شروع در ساعت ۲۱:۲۳",
 		s26FoundDeals:    make([]DealItem, 0),
 		s26TriggeredURLs: make(map[string]bool),
 		s26MaxPriceToman: 30000000,
@@ -872,13 +876,63 @@ func IsGalaxyS26Phone(title string, priceToman int64) bool {
 	return matched
 }
 
+func GetCurrentS26Interval(now time.Time) (active bool, isTurbo bool, interval time.Duration, statusText string) {
+	h := now.Hour()
+	m := now.Minute()
+	s := now.Second()
+	currentSec := h*3600 + m*60 + s
+
+	startSec := 21*3600 + 23*60      // 21:23:00
+	endSec := 21*3600 + 40*60        // 21:40:00
+	turboStartSec := 21*3600 + 30*60 // 21:30:00
+	turboEndSec := 21*3600 + 31*60   // 21:31:00
+
+	if currentSec < startSec {
+		remSec := startSec - currentSec
+		remH := remSec / 3600
+		remM := (remSec % 3600) / 60
+		remS := remSec % 60
+		return false, false, 0, fmt.Sprintf("در انتظار شروع در ساعت ۲۱:۲۳ (باقی‌مانده: %02d:%02d:%02d)", remH, remM, remS)
+	}
+
+	if currentSec >= endSec {
+		return false, false, 0, "پایان بازه زمانی پایش (ساعت ۲۱:۴۰) - متوقف شد"
+	}
+
+	// Inside 21:30 to 21:31
+	if currentSec >= turboStartSec && currentSec < turboEndSec {
+		return true, true, 5 * time.Second, "⚡ حالت توربو ماکزیمم (هر ۵ ثانیه - تا ۲۱:۳۱)"
+	}
+
+	return true, false, 10 * time.Second, "🔥 در حال پایش فعال و سریع (هر ۱۰ ثانیه - تا ۲۱:۴۰)"
+}
+
 func (s *ServerState) StartS26Sniper() {
 	go func() {
-		time.Sleep(2 * time.Second)
-		fmt.Println("🎯 [S26 Sniper] Dedicated Galaxy S26 background monitor started (interval: 15s, target price: 20M - 30M Toman, e.g. 26M)...")
+		fmt.Println("🎯 [S26 Sniper] Scheduled monitor initialized: Standby until 21:23:00. Active 21:23-21:40 (10s), Turbo 21:30-21:31 (5s).")
+		lastPrintedMin := -1
 		for {
+			now := time.Now()
+			active, isTurbo, interval, status := GetCurrentS26Interval(now)
+
+			s.mu.Lock()
+			s.s26StatusDesc = status
+			s.s26SniperActive = active
+			s.s26IsTurbo = isTurbo
+			s.mu.Unlock()
+
+			if !active {
+				if now.Minute() != lastPrintedMin && now.Minute()%5 == 0 {
+					lastPrintedMin = now.Minute()
+					fmt.Printf("⏳ [S26 Sniper Standby] %s (زمان فعلی سیستم: %s)\n", status, now.Format("15:04:05"))
+				}
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			// ACTIVE WINDOW (21:23 to 21:40)!
 			s.ScanForGalaxyS26()
-			time.Sleep(15 * time.Second)
+			time.Sleep(interval)
 		}
 	}()
 }
@@ -1066,13 +1120,8 @@ func (s *ServerState) TriggerS26Sniper(deal DealItem) {
 func (s *ServerState) StartBackgroundCrawler() {
 	s.LoadCache()
 	s.StartS26Sniper()
-	ticker := time.NewTicker(time.Duration(s.intervalSec) * time.Second)
-	go func() {
-		s.RunScan()
-		for range ticker.C {
-			s.RunScan()
-		}
-	}()
+	// Background crawl is currently PAUSED per user request ("فعلا درخواست زدن رو متوقف کن").
+	// Only the scheduled S26 Sniper will run in its exact window (21:23 to 21:40).
 }
 
 func (s *ServerState) GetDeals(minDisc int, catKey, storeKey string) []DealItem {
@@ -1887,18 +1936,19 @@ const indexHTML = `<!DOCTYPE html>
         </div>
 
         <!-- Galaxy S26 Dedicated Sniper Box -->
-        <div class="banner-sniper">
+        <div class="banner-sniper" id="s26Banner">
             <div class="sniper-left">
-                <div class="sniper-badge-pulse">🎯 اسنایپر هوشمند Galaxy S26 / S۲۶</div>
+                <div class="sniper-badge-pulse" id="s26Badge">⏳ زمان‌بندی‌شده: Galaxy S26</div>
                 <div class="sniper-info">
                     <strong>پایش اختصاصی اسنپ‌شاپ برای گوشی سامسونگ Galaxy S26 (شامل عدد فارسی S۲۶):</strong>
-                    <span>فرکانس: هر ۱۵ ثانیه | شرط خودکار: <strong>قیمت بالای ۲۰ و زیر ۳۰ میلیون تومان (به‌ویژه ۲۶ میلیون)</strong> | عملکرد: باز کردن تب جدید + افزودن به سبد + انتخاب روز و ساعت ارسال + انتقال مستقیم به درگاه بانکی + آلارم صوتی</span>
+                    <span id="s26StatusText" style="font-weight: 600; color: #fde047;">در انتظار شروع در ساعت ۲۱:۲۳</span>
+                    <span style="font-size: 12px; color: #cbd5e1;">بازه پایش: <strong>۲۱:۲۳ الی ۲۱:۴۰</strong> (هر ۱۰ ثانیه | ۲۱:۳۰ تا ۲۱:۳۱ هر ۵ ثانیه توربو) | شرط: <strong>قیمت بالای ۲۰ و زیر ۳۰ میلیون تومان (به‌ویژه ۲۶ میلیون)</strong></span>
                 </div>
             </div>
             <div class="sniper-actions">
                 <div class="sniper-status-pill">
-                    <span class="live-dot"></span>
-                    <span>اسکن S26: <strong id="s26ScanCount" style="color: #38bdf8;">0</strong> بار</span>
+                    <span class="live-dot" id="s26Dot" style="background: #eab308; box-shadow: 0 0 8px #eab308;"></span>
+                    <span id="s26TimerDisplay">شروع در ۲۱:۲۳</span>
                 </div>
                 <button onclick="triggerS26Test()" class="btn-sniper-test">⚡ تست شبیه‌ساز خرید S26</button>
             </div>
@@ -2074,9 +2124,37 @@ const indexHTML = `<!DOCTYPE html>
                 document.getElementById('snappDealCount').innerText = (data.snapp_deals || 0).toLocaleString();
                 document.getElementById('dkDealCount').innerText = (data.dk_deals || 0).toLocaleString();
                 document.getElementById('totalDealCount').innerText = (data.total_deals || 0).toLocaleString();
-                if (data.s26_scan_count !== undefined) {
-                    const s26El = document.getElementById('s26ScanCount');
-                    if (s26El) s26El.innerText = data.s26_scan_count.toLocaleString();
+                if (data.s26_status_desc) {
+                    const statusEl = document.getElementById('s26StatusText');
+                    if (statusEl) statusEl.innerText = data.s26_status_desc;
+                    const timerEl = document.getElementById('s26TimerDisplay');
+                    if (timerEl) {
+                        if (data.s26_sniper_active) {
+                            timerEl.innerHTML = data.s26_is_turbo ? '<strong style="color:#ef4444;">⚡ توربو ۵ ثانیه</strong>' : '<strong style="color:#22c55e;">🔥 فعال (۱۰ ثانیه)</strong>';
+                        } else {
+                            timerEl.innerText = data.s26_status_desc.includes('در انتظار') ? (data.s26_status_desc.split('(')[1] ? data.s26_status_desc.split('(')[1].replace(')', '') : 'شروع در ۲۱:۲۳') : 'اسکن S26: ' + (data.s26_scan_count || 0) + ' بار';
+                        }
+                    }
+                    const badgeEl = document.getElementById('s26Badge');
+                    const dotEl = document.getElementById('s26Dot');
+                    if (badgeEl && dotEl) {
+                        if (data.s26_is_turbo) {
+                            badgeEl.innerText = '⚡ توربو فعال: Galaxy S26';
+                            badgeEl.style.background = '#dc2626';
+                            dotEl.style.background = '#ef4444';
+                            dotEl.style.boxShadow = '0 0 10px #ef4444';
+                        } else if (data.s26_sniper_active) {
+                            badgeEl.innerText = '🔥 پایش فعال: Galaxy S26';
+                            badgeEl.style.background = '#22c55e';
+                            dotEl.style.background = '#22c55e';
+                            dotEl.style.boxShadow = '0 0 10px #22c55e';
+                        } else {
+                            badgeEl.innerText = '⏳ زمان‌بندی‌شده: Galaxy S26';
+                            badgeEl.style.background = '#d97706';
+                            dotEl.style.background = '#eab308';
+                            dotEl.style.boxShadow = '0 0 8px #eab308';
+                        }
+                    }
                 }
                 if (data.cat_counts) {
                     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -2438,6 +2516,8 @@ func main() {
 			"snapp_requests":    atomic.LoadInt64(&state.snappReqs),
 			"snapp_429":         atomic.LoadInt64(&state.snapp429),
 			"s26_sniper_active": state.s26SniperActive,
+			"s26_is_turbo":      state.s26IsTurbo,
+			"s26_status_desc":   state.s26StatusDesc,
 			"s26_scan_count":    state.s26ScanCount,
 			"s26_last_scan":     state.s26LastScanTime.Format("15:04:05"),
 			"s26_found_count":   len(state.s26FoundDeals),
