@@ -1424,9 +1424,71 @@ const indexHTML = `<!DOCTYPE html>
             border-radius: 16px;
             border: 1px dashed var(--border);
         }
+
+        .loading-bar {
+            height: 3px;
+            width: 100%;
+            background: linear-gradient(90deg, #38bdf8, #a855f7, #ef4444);
+            background-size: 200% 100%;
+            animation: moveGradient 1.5s infinite linear;
+            display: none;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        @keyframes moveGradient {
+            0% { background-position: 100% 0; }
+            100% { background-position: -100% 0; }
+        }
+        .grid.loading-dim {
+            opacity: 0.5;
+            transition: opacity 0.2s ease;
+            pointer-events: none;
+        }
+        .btn-clear-filter {
+            background: linear-gradient(135deg, #ef4444, #f43f5e);
+            color: #fff;
+            border: none;
+            padding: 10px 22px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            margin-top: 15px;
+            transition: all 0.2s;
+            box-shadow: 0 4px 14px rgba(239, 68, 68, 0.35);
+        }
+        .btn-clear-filter:hover {
+            opacity: 0.92;
+            transform: translateY(-2px);
+        }
+        .btn-suggestion {
+            background: rgba(255, 255, 255, 0.08);
+            color: #38bdf8;
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            margin: 6px 4px;
+            transition: all 0.2s;
+        }
+        .btn-suggestion:hover {
+            background: rgba(56, 189, 248, 0.2);
+            color: #fff;
+        }
+        .scroll-status {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 25px 15px;
+            color: #94a3b8;
+            font-size: 13px;
+        }
     </style>
 </head>
 <body>
+    <div id="loadingBar" class="loading-bar"></div>
 
     <header class="header">
         <div class="header-content">
@@ -1562,8 +1624,17 @@ const indexHTML = `<!DOCTYPE html>
         let currentStore = 'all';
         let countdownSec = 60;
         let activeFetchId = 0;
+        let currentAbortController = null;
+
+        // Infinite Scroll & Pagination State
+        let rawDeals = [];
+        let filteredDeals = [];
+        let renderedCount = 0;
+        const BATCH_SIZE = 40;
+        let isLoadingMore = false;
 
         function selectCategory(cat) {
+            if (currentCategory === cat) return;
             currentCategory = cat;
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 if (btn.getAttribute('data-cat') === cat) {
@@ -1572,17 +1643,11 @@ const indexHTML = `<!DOCTYPE html>
                     btn.classList.remove('active');
                 }
             });
-            // Immediately clear the grid so previous tab content is never shown
-            document.getElementById('productsGrid').innerHTML = ` + "`" + `
-                <div class="empty-state">
-                    <div style="font-size: 32px; margin-bottom: 8px;">⏳</div>
-                    <h3 style="color: #94a3b8;">در حال دریافت تخفیف‌های این بخش...</h3>
-                </div>
-            ` + "`" + `;
-            loadDeals();
+            loadDeals(false);
         }
 
         function selectStore(store) {
+            if (currentStore === store) return;
             currentStore = store;
             document.querySelectorAll('.store-btn').forEach(btn => {
                 if (btn.getAttribute('data-store') === store) {
@@ -1591,14 +1656,41 @@ const indexHTML = `<!DOCTYPE html>
                     btn.classList.remove('active');
                 }
             });
-            // Immediately clear the grid so previous store content is never shown
-            document.getElementById('productsGrid').innerHTML = ` + "`" + `
-                <div class="empty-state">
-                    <div style="font-size: 32px; margin-bottom: 8px;">⏳</div>
-                    <h3 style="color: #94a3b8;">در حال دریافت تخفیف‌های این فروشگاه...</h3>
-                </div>
-            ` + "`" + `;
-            loadDeals();
+            loadDeals(false);
+        }
+
+        function setDiscountFilter(val) {
+            document.getElementById('discFilter').value = val;
+            loadDeals(false);
+        }
+
+        function setStoreFilter(store) {
+            selectStore(store);
+        }
+
+        function clearFilters() {
+            document.getElementById('searchInput').value = '';
+            document.getElementById('maxPrice').value = '';
+            applyFilters();
+        }
+
+        function applyFilters() {
+            const searchQ = document.getElementById('searchInput').value.trim().toLowerCase();
+            const maxPrice = parseInt(document.getElementById('maxPrice').value, 10) || 0;
+            const sortBy = document.getElementById('sortBy').value;
+
+            filteredDeals = rawDeals.filter(d => {
+                if (searchQ && !d.title.toLowerCase().includes(searchQ)) return false;
+                if (maxPrice > 0 && d.price_toman > maxPrice) return false;
+                return true;
+            });
+
+            if (sortBy === 'price_asc') filteredDeals.sort((a, b) => a.price_toman - b.price_toman);
+            else if (sortBy === 'price_desc') filteredDeals.sort((a, b) => b.price_toman - a.price_toman);
+            else if (sortBy === 'newest') filteredDeals.sort((a, b) => (b.found_at || '').localeCompare(a.found_at || ''));
+            else filteredDeals.sort((a, b) => b.discount_percent - a.discount_percent || a.price_toman - b.price_toman);
+
+            resetAndRenderGrid();
         }
 
         async function updateStatus() {
@@ -1624,109 +1716,218 @@ const indexHTML = `<!DOCTYPE html>
                     });
                 }
             } catch (err) {
-                console.error(err);
+                console.error("Status update error:", err);
             }
         }
 
-        async function loadDeals() {
+        async function loadDeals(isBackground = false) {
             const fetchId = ++activeFetchId;
+            const loadingBar = document.getElementById('loadingBar');
+            const grid = document.getElementById('productsGrid');
+
+            if (!isBackground) {
+                if (loadingBar) loadingBar.style.display = 'block';
+                if (grid.children.length > 0) {
+                    grid.classList.add('loading-dim');
+                } else {
+                    grid.innerHTML = ` + "`" + `
+                        <div class="empty-state">
+                            <div style="font-size: 32px; margin-bottom: 8px;">⏳</div>
+                            <h3 style="color: #94a3b8;">در حال دریافت و آماده‌سازی تخفیف‌ها...</h3>
+                        </div>
+                    ` + "`" + `;
+                }
+            }
+
+            if (currentAbortController) {
+                currentAbortController.abort();
+            }
+            currentAbortController = new AbortController();
+
             const minDisc = document.getElementById('discFilter').value;
-            const searchQ = document.getElementById('searchInput').value.trim().toLowerCase();
+            const url = '/api/deals?min_discount=' + minDisc + '&category=' + currentCategory + '&store=' + currentStore;
 
             try {
-                const url = '/api/deals?min_discount=' + minDisc + '&category=' + currentCategory + '&store=' + currentStore;
-                const res = await fetch(url);
-                let deals = await res.json();
-                
-                // If the user already switched to another tab, discard stale response
+                const res = await fetch(url, { signal: currentAbortController.signal });
+                const deals = await res.json();
+
                 if (fetchId !== activeFetchId) return;
 
-                if (!deals || !Array.isArray(deals)) {
-                    deals = [];
-                }
+                rawDeals = Array.isArray(deals) ? deals : [];
 
+                const searchQ = document.getElementById('searchInput').value.trim().toLowerCase();
                 const maxPrice = parseInt(document.getElementById('maxPrice').value, 10) || 0;
                 const sortBy = document.getElementById('sortBy').value;
-                const filtered = deals.filter(d => {
+
+                filteredDeals = rawDeals.filter(d => {
                     if (searchQ && !d.title.toLowerCase().includes(searchQ)) return false;
                     if (maxPrice > 0 && d.price_toman > maxPrice) return false;
                     return true;
                 });
 
-                if (sortBy === 'price_asc') filtered.sort((a, b) => a.price_toman - b.price_toman);
-                else if (sortBy === 'price_desc') filtered.sort((a, b) => b.price_toman - a.price_toman);
-                else if (sortBy === 'newest') filtered.sort((a, b) => (b.found_at || '').localeCompare(a.found_at || ''));
-                else filtered.sort((a, b) => b.discount_percent - a.discount_percent || a.price_toman - b.price_toman);
+                if (sortBy === 'price_asc') filteredDeals.sort((a, b) => a.price_toman - b.price_toman);
+                else if (sortBy === 'price_desc') filteredDeals.sort((a, b) => b.price_toman - a.price_toman);
+                else if (sortBy === 'newest') filteredDeals.sort((a, b) => (b.found_at || '').localeCompare(a.found_at || ''));
+                else filteredDeals.sort((a, b) => b.discount_percent - a.discount_percent || a.price_toman - b.price_toman);
 
-                renderGrid(filtered);
+                if (isBackground && grid.children.length > 0 && !grid.querySelector('.empty-state')) {
+                    // Update badges quietly without wiping the DOM or resetting scroll
+                    updateStatus();
+                    return;
+                }
+
+                resetAndRenderGrid();
                 updateStatus();
             } catch (err) {
+                if (err.name === 'AbortError') return;
                 console.error("Error fetching deals:", err);
                 if (fetchId === activeFetchId) {
-                    renderGrid([]);
+                    rawDeals = [];
+                    filteredDeals = [];
+                    resetAndRenderGrid();
+                }
+            } finally {
+                if (fetchId === activeFetchId) {
+                    if (loadingBar) loadingBar.style.display = 'none';
+                    grid.classList.remove('loading-dim');
                 }
             }
         }
 
-        function renderGrid(deals) {
-            const container = document.getElementById('productsGrid');
-            if (!deals || deals.length === 0) {
-                container.innerHTML = ` + "`" + `
-                    <div class="empty-state">
-                        <div style="font-size: 38px; margin-bottom: 10px;">📭</div>
-                        <h3>هیچ کالایی با درصد تخفیف انتخابی در این بخش یافت نشد.</h3>
-                        <p style="color: #64748b; font-size: 13px; margin-top: 8px;">
-                            می‌توانید درصد تخفیف را روی ۵۰٪ بگذارید یا فروشگاه و دسته‌بندی دیگری را انتخاب کنید.
-                        </p>
-                    </div>
-                ` + "`" + `;
+        function resetAndRenderGrid() {
+            const grid = document.getElementById('productsGrid');
+            grid.innerHTML = '';
+            renderedCount = 0;
+
+            if (filteredDeals.length === 0) {
+                renderEmptyState(grid);
                 return;
             }
 
-            let html = '';
-            deals.forEach(d => {
-                const isSuper = d.discount_percent >= 80;
-                const badgeClass = isSuper ? 'badge-discount badge-super' : 'badge-discount';
-                const isDk = d.store === 'digikala';
-                const storeBadgeClass = isDk ? 'badge-store digikala' : 'badge-store snapp';
-                const fastBuyBtnClass = isDk ? 'btn-fastbuy dk-fastbuy' : 'btn-fastbuy';
-                const fastBuyLink = (d.fast_buy_url || d.product_url + '?quick_buy=1');
-                const normalLink = d.product_url;
-                const storeActionText = isDk ? 'مشاهده در دیجی‌کالا ↗' : 'مشاهده در اسنپ‌شاپ ↗';
-                
-                html += ` + "`" + `
-                    <div class="card">
-                        <div class="card-img-box">
-                            <span class="${badgeClass}">%${d.discount_percent} تخفیف</span>
-                            <span class="${storeBadgeClass}">${d.store_name}</span>
-                            <img src="${d.image_url}" alt="${d.title}" class="card-img" loading="lazy" onerror="this.src='https://snappshop.ir/assets/images/placeholder.png'">
-                        </div>
-                        <div class="card-content">
-                            <div>
-                                <span class="category-tag">${d.category_name}</span>
-                                <h2 class="card-title" title="${d.title}">${d.title}</h2>
-                            </div>
-                            <div>
-                                <div class="price-box">
-                                    <div class="curr-price">${d.price_formatted} <span>تومان</span></div>
-                                    ${d.orig_formatted !== '0' && d.orig_formatted !== d.price_formatted ? ` + "`" + `<div class="orig-price">${d.orig_formatted} تومان</div>` + "`" + ` : ''}
-                                </div>
-                                <div class="btn-group">
-                                    <a href="${fastBuyLink}" target="_blank" rel="noopener noreferrer" class="${fastBuyBtnClass}">
-                                        ⚡ خرید ۱-کلیکه (انتقال به شیپینگ)
-                                    </a>
-                                    <a href="${normalLink}" target="_blank" rel="noopener noreferrer" class="btn-view">
-                                        ${storeActionText}
-                                    </a>
-                                </div>
-                            </div>
+            renderNextBatch();
+        }
+
+        function renderEmptyState(container) {
+            const searchQ = document.getElementById('searchInput').value.trim();
+            const maxPrice = parseInt(document.getElementById('maxPrice').value, 10) || 0;
+            const minDisc = document.getElementById('discFilter').value;
+
+            if (rawDeals.length > 0) {
+                let filterInfo = [];
+                if (searchQ) filterInfo.push('جستجو: "' + searchQ + '"');
+                if (maxPrice > 0) filterInfo.push('سقف قیمت: ' + maxPrice.toLocaleString() + ' تومان');
+
+                container.innerHTML = ` + "`" + `
+                    <div class="empty-state">
+                        <div style="font-size: 38px; margin-bottom: 10px;">🔍</div>
+                        <h3 style="color: #f59e0b;">تعداد ` + "`" + ` + rawDeals.length.toLocaleString() + ` + "`" + ` کالا در این بخش موجود است، اما با فیلترهای شما مطابقت ندارند!</h3>
+                        <p style="color: #94a3b8; font-size: 14px; margin-top: 10px;">
+                            فیلترهای فعال: <strong>` + "`" + ` + filterInfo.join(' | ') + ` + "`" + `</strong>
+                        </p>
+                        <button onclick="clearFilters()" class="btn-clear-filter">
+                            ❌ حذف فیلترها و مشاهده همه ` + "`" + ` + rawDeals.length.toLocaleString() + ` + "`" + ` کالا
+                        </button>
+                    </div>
+                ` + "`" + `;
+            } else {
+                const storeText = currentStore === 'all' ? 'همه فروشگاه‌ها' : (currentStore === 'snapp' ? 'اسنپ‌شاپ' : 'دیجی‌کالا');
+                const storeBtn = currentStore !== 'all' ? '<button onclick="setStoreFilter(\'all\')" class="btn-suggestion">🌟 مشاهده در همه فروشگاه‌ها</button>' : '';
+                container.innerHTML = ` + "`" + `
+                    <div class="empty-state">
+                        <div style="font-size: 38px; margin-bottom: 10px;">📭</div>
+                        <h3>هیچ کالایی با حداقل %` + "`" + ` + minDisc + ` + "`" + ` تخفیف در این بخش (` + "`" + ` + storeText + ` + "`" + `) یافت نشد.</h3>
+                        <p style="color: #64748b; font-size: 13px; margin: 12px 0;">
+                            می‌توانید درصد تخفیف را کاهش دهید یا فروشگاه دیگری را انتخاب کنید:
+                        </p>
+                        <div>
+                            <button onclick="setDiscountFilter(50)" class="btn-suggestion">⚡ مشاهده با حداقل ۵۰٪ تخفیف</button>
+                            <button onclick="setDiscountFilter(30)" class="btn-suggestion">✨ مشاهده با حداقل ۳۰٪ تخفیف</button>
+                            ` + "`" + ` + storeBtn + ` + "`" + `
                         </div>
                     </div>
                 ` + "`" + `;
-            });
-
-            container.innerHTML = html;
+            }
         }
+
+        function createCardHTML(d) {
+            const isSuper = d.discount_percent >= 80;
+            const badgeClass = isSuper ? 'badge-discount badge-super' : 'badge-discount';
+            const isDk = d.store === 'digikala';
+            const storeBadgeClass = isDk ? 'badge-store digikala' : 'badge-store snapp';
+            const fastBuyBtnClass = isDk ? 'btn-fastbuy dk-fastbuy' : 'btn-fastbuy';
+            const fastBuyLink = (d.fast_buy_url || d.product_url + '?quick_buy=1');
+            const normalLink = d.product_url;
+            const storeActionText = isDk ? 'مشاهده در دیجی‌کالا ↗' : 'مشاهده در اسنپ‌شاپ ↗';
+
+            return ` + "`" + `
+                <div class="card">
+                    <div class="card-img-box">
+                        <span class="${badgeClass}">%${d.discount_percent} تخفیف</span>
+                        <span class="${storeBadgeClass}">${d.store_name}</span>
+                        <img src="${d.image_url}" alt="${d.title}" class="card-img" loading="lazy" onerror="this.src='https://snappshop.ir/assets/images/placeholder.png'">
+                    </div>
+                    <div class="card-content">
+                        <div>
+                            <span class="category-tag">${d.category_name}</span>
+                            <h2 class="card-title" title="${d.title}">${d.title}</h2>
+                        </div>
+                        <div>
+                            <div class="price-box">
+                                <div class="curr-price">${d.price_formatted} <span>تومان</span></div>
+                                ${d.orig_formatted !== '0' && d.orig_formatted !== d.price_formatted ? ` + "`" + `<div class="orig-price">${d.orig_formatted} تومان</div>` + "`" + ` : ''}
+                            </div>
+                            <div class="btn-group">
+                                <a href="${fastBuyLink}" target="_blank" rel="noopener noreferrer" class="${fastBuyBtnClass}">
+                                    ⚡ خرید ۱-کلیکه (انتقال به شیپینگ)
+                                </a>
+                                <a href="${normalLink}" target="_blank" rel="noopener noreferrer" class="btn-view">
+                                    ${storeActionText}
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            ` + "`" + `;
+        }
+
+        function renderNextBatch() {
+            if (isLoadingMore || renderedCount >= filteredDeals.length) return;
+            isLoadingMore = true;
+
+            const grid = document.getElementById('productsGrid');
+            const oldStatus = document.getElementById('scrollStatusIndicator');
+            if (oldStatus) oldStatus.remove();
+
+            const nextSlice = filteredDeals.slice(renderedCount, renderedCount + BATCH_SIZE);
+            let chunkHtml = '';
+            for (let i = 0; i < nextSlice.length; i++) {
+                chunkHtml += createCardHTML(nextSlice[i]);
+            }
+
+            grid.insertAdjacentHTML('beforeend', chunkHtml);
+            renderedCount += nextSlice.length;
+
+            const statusDiv = document.createElement('div');
+            statusDiv.id = 'scrollStatusIndicator';
+            statusDiv.className = 'scroll-status';
+            if (renderedCount < filteredDeals.length) {
+                statusDiv.innerHTML = 'در حال نمایش <strong>' + renderedCount.toLocaleString() + '</strong> از <strong>' + filteredDeals.length.toLocaleString() + '</strong> کالا (اسکرول کنید تا بقیه نمایش داده شوند...)';
+            } else {
+                statusDiv.innerHTML = '✅ تمام <strong>' + filteredDeals.length.toLocaleString() + '</strong> کالا بارگذاری شدند.';
+            }
+            grid.appendChild(statusDiv);
+
+            isLoadingMore = false;
+        }
+
+        window.addEventListener('scroll', () => {
+            if (isLoadingMore || renderedCount >= filteredDeals.length) return;
+            const scrollBottom = window.innerHeight + window.scrollY;
+            const docHeight = document.documentElement.scrollHeight;
+            if (scrollBottom >= docHeight - 700) {
+                renderNextBatch();
+            }
+        }, { passive: true });
 
         async function triggerManualScan() {
             const btn = event.currentTarget;
@@ -1735,27 +1936,23 @@ const indexHTML = `<!DOCTYPE html>
             try {
                 await fetch('/api/trigger', { method: 'POST' });
                 countdownSec = 60;
-                await loadDeals();
+                await loadDeals(false);
             } finally {
                 btn.innerText = "⚡ اسکن فوری";
                 btn.disabled = false;
             }
         }
 
-        function applyFilters() {
-            loadDeals();
-        }
-
         setInterval(() => {
             countdownSec--;
             if (countdownSec <= 0) {
                 countdownSec = 60;
-                loadDeals();
+                loadDeals(true);
             }
             document.getElementById('countdown').innerText = countdownSec;
         }, 1000);
 
-        loadDeals();
+        loadDeals(false);
     </script>
 </body>
 </html>
