@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fast Buy 1-Click for SnappShop (Complete Auto-Checkout to Bank Gateway)
 // @namespace    https://snappshop.ir/
-// @version      4.1
-// @description  خرید خودکار ۱-کلیکه از صفحه محصول تا درگاه بانکی: افزودن به سبد، ثبت سفارش، باز کردن تب سریعترین ارسال، انتخاب نزدیک‌ترین روز و ساعت، تایید و انتقال مستقیم به درگاه بانک
+// @version      4.2
+// @description  اسنایپر هوشمند Galaxy S26: رصد خودکار لیست کالاها و لیزی‌لود (Product-List)، افزودن به سبد، ثبت سفارش، انتخاب سریعترین ارسال و اتصال مستقیم به درگاه بانکی
 // @match        https://snappshop.ir/*
 // @match        https://www.snappshop.ir/*
 // @run-at       document-start
@@ -15,11 +15,10 @@
     const urlParams = new URLSearchParams(window.location.search);
     const isQuickBuy = urlParams.get('quick_buy') === '1' || sessionStorage.getItem('snapp_quick_buy') === '1';
     const isS26Sniper = urlParams.get('sniper') === 's26' || sessionStorage.getItem('snapp_s26_sniper') === '1';
+    const isProductListPage = window.location.pathname.startsWith('/product-list/');
 
     if (isS26Sniper) sessionStorage.setItem('snapp_s26_sniper', '1');
     if (isQuickBuy)  sessionStorage.setItem('snapp_quick_buy', '1');
-
-    if (!isQuickBuy && !isS26Sniper) return;
 
     // -------------------------------------------------------------------------
     // Audio Chime
@@ -44,9 +43,7 @@
     // -------------------------------------------------------------------------
     // Banner UI
     // -------------------------------------------------------------------------
-    const themeColor = isS26Sniper
-        ? 'linear-gradient(90deg, #dc2626, #b91c1c)'
-        : 'linear-gradient(90deg, #7c3aed, #ec4899)';
+    const themeColor = 'linear-gradient(90deg, #dc2626, #b91c1c)';
 
     function showBanner(message, bgColor) {
         bgColor = bgColor || themeColor;
@@ -59,7 +56,31 @@
             if (document.body) attach(); else document.addEventListener('DOMContentLoaded', attach);
         }
         banner.style.background = bgColor;
-        banner.innerHTML = (isS26Sniper ? '🎯 [اسنایپر Galaxy S26] ' : '⚡ ') + message;
+        banner.innerHTML = '🎯 [اسنایپر Galaxy S26] ' + message;
+    }
+
+    // -------------------------------------------------------------------------
+    // Persian digits normalizer
+    // -------------------------------------------------------------------------
+    function normalizeDigits(str) {
+        return (str || '')
+            .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+            .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+    }
+
+    // -------------------------------------------------------------------------
+    // S26 Matcher Logic
+    // -------------------------------------------------------------------------
+    function isMatchingS26(title, text) {
+        const full = normalizeDigits((title + ' ' + text).toLowerCase());
+        const hasS26 = /s\s*26|s26|اس\s*۲۶|اس۲۶/.test(full);
+        if (!hasS26) return false;
+
+        // Reject accessories
+        const isAccessory = /قاب|کاور|گلس|محافظ|شارژر|کابل|هولدر|استند|کیف|بند|هندزفری|هدفون|باتری|آداپتور/.test(full);
+        if (isAccessory) return false;
+
+        return true;
     }
 
     // -------------------------------------------------------------------------
@@ -80,9 +101,66 @@
     }
 
     // =========================================================================
+    // مرحله ۰: پایش ویژه لیست محصولات و رویدادها (مانند Doe3z0) با پشتیبانی Lazy Loading
+    // =========================================================================
+    if (isProductListPage) {
+        showBanner('پایش آنی لیست کالاها و لیزی‌لود برای Galaxy S26 فعال است...');
+
+        let s26Found = false;
+        function scanProductCards() {
+            if (s26Found) return;
+            const cards = Array.from(document.querySelectorAll('a[href*="/product/snp-"]'));
+
+            for (const card of cards) {
+                const text = card.textContent || '';
+                const titleEl = card.querySelector('h2, h3, h4, p, [class*="title"]') || card;
+                const title = titleEl.textContent || '';
+
+                if (isMatchingS26(title, text)) {
+                    // Extract price numbers
+                    const normText = normalizeDigits(text).replace(/,/g, '');
+                    const priceMatches = normText.match(/\d{7,10}/g);
+                    let validPrice = false;
+
+                    if (priceMatches) {
+                        for (const pStr of priceMatches) {
+                            let p = parseInt(pStr, 10);
+                            if (p > 100000000) p = p / 10;
+                            // Check 20M to 30M Toman
+                            if (p >= 20000000 && p <= 30000000) {
+                                validPrice = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // If matches S26 and within 20M-30M Toman (or specifically 26M)
+                    if (validPrice || /26\s*000\s*000|۲۶\s*۰۰۰\s*۰۰۰/.test(text)) {
+                        s26Found = true;
+                        playAlertSound(1500);
+                        showBanner('🚨 گلکسی S26 شناسایی شد! انتقال فوری به فرآیند خرید...');
+
+                        let targetHref = card.getAttribute('href') || '';
+                        if (!targetHref.startsWith('http')) {
+                            targetHref = 'https://snappshop.ir' + targetHref;
+                        }
+                        const sep = targetHref.includes('?') ? '&' : '?';
+                        window.location.href = targetHref + sep + 'quick_buy=1&sniper=s26';
+                        return;
+                    }
+                }
+            }
+        }
+
+        const scanIv = setInterval(scanProductCards, 60);
+        new MutationObserver(scanProductCards).observe(document.documentElement, { childList: true, subtree: true });
+        window.addEventListener('scroll', scanProductCards, { passive: true });
+    }
+
+    // =========================================================================
     // مرحله ۱: صفحه کالا — افزودن به سبد خرید
     // =========================================================================
-    if (window.location.pathname.startsWith('/product/')) {
+    if (window.location.pathname.startsWith('/product/') && (isQuickBuy || isS26Sniper)) {
         playAlertSound(880);
         showBanner('مرحله ۱/۴: افزودن خودکار کالا به سبد خرید...');
 
@@ -110,7 +188,7 @@
     // =========================================================================
     // مرحله ۲: صفحه سبد — کلیک ثبت سفارش
     // =========================================================================
-    if (window.location.pathname === '/checkout/cart') {
+    if (window.location.pathname === '/checkout/cart' && (isQuickBuy || isS26Sniper)) {
         playAlertSound(980);
         showBanner('مرحله ۲/۴: ثبت سفارش...');
 
@@ -137,13 +215,13 @@
     }
 
     // =========================================================================
-    // مرحله ۳: صفحه ارسال — SEQUENCE واکنشی و دقیق:
+    // مرحله ۳: صفحه ارسال — SEQUENCE واکنشی و دقیق
     // ۱. کلیک و باز کردن بخش «سریع‌ترین ارسال»
     // ۲. کلیک اولین تاریخ در دسترس (دوشنبه، فردا و...)
     // ۳. کلیک اولین ساعت در دسترس (۱۱ الی ۱۴ و...)
     // ۴. کلیک دکمه «تایید و ادامه»
     // =========================================================================
-    if (window.location.pathname.includes('/checkout/shipping')) {
+    if (window.location.pathname.includes('/checkout/shipping') && (isQuickBuy || isS26Sniper)) {
         playAlertSound(1100);
         showBanner('مرحله ۳/۴: در حال هماهنگی زمان ارسال (Shipping)...');
 
@@ -152,7 +230,6 @@
         let timeSelected = false;
         let confirmClicked = false;
 
-        // تابع پیدا کردن تب/کارت سریع‌ترین ارسال
         function getFastestShippingElement() {
             const all = Array.from(document.querySelectorAll('div, label, section, button'));
             for (const el of all) {
@@ -164,7 +241,6 @@
             return null;
         }
 
-        // تابع پیدا کردن اولین کارت تاریخ
         function getFirstDayCard() {
             const all = Array.from(document.querySelectorAll('label, div, button'));
             return all.find(el => {
@@ -177,7 +253,6 @@
             }) || null;
         }
 
-        // تابع پیدا کردن اولین بازه ساعتی
         function getFirstTimeSlot() {
             const all = Array.from(document.querySelectorAll('label, div, span, button'));
             return all.find(el => {
@@ -190,7 +265,6 @@
             }) || null;
         }
 
-        // تابع پیدا کردن دکمه تایید و ادامه
         function getConfirmButton() {
             return findByText(['تایید و ادامه', 'ادامه و تایید', 'ادامه جهت پرداخت']);
         }
@@ -198,7 +272,7 @@
         function runShippingReactive() {
             if (confirmClicked) return;
 
-            // گام ۴: اگر دکمه «تایید و ادامه» ظاهر شده و ساعت انتخاب شده، کلیک کن!
+            // گام ۴: کلیک دکمه تایید و ادامه
             const confirmBtn = getConfirmButton();
             if (confirmBtn && timeSelected) {
                 confirmClicked = true;
@@ -237,13 +311,12 @@
                 return;
             }
 
-            // گام ۱: باز کردن تب سریع‌ترین ارسال (اگر روزها هنوز در صفحه نیستند)
+            // گام ۱: باز کردن تب سریع‌ترین ارسال
             if (!dayCard && (Date.now() - lastFastestClick > 500)) {
                 const fastestEl = getFastestShippingElement();
                 if (fastestEl) {
                     lastFastestClick = Date.now();
                     fastestEl.click();
-                    // کلیک روی رادیوباتن داخل آن در صورت وجود
                     const innerRadio = fastestEl.querySelector('input[type="radio"]');
                     if (innerRadio) {
                         innerRadio.click();
@@ -263,7 +336,7 @@
     // =========================================================================
     // مرحله ۴: صفحه پرداخت — کلیک «پرداخت از طریق درگاه بانکی»
     // =========================================================================
-    if (window.location.pathname.includes('/checkout/payment')) {
+    if (window.location.pathname.includes('/checkout/payment') && (isQuickBuy || isS26Sniper)) {
         playAlertSound(1200);
         showBanner('مرحله ۴/۴: در حال انتقال به درگاه بانکی شاپرک...');
 

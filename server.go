@@ -934,6 +934,21 @@ func (s *ServerState) StartS26Sniper() {
 }
 
 func (s *ServerState) ScanForGalaxyS26() {
+	s.mu.Lock()
+	s.s26ScanCount++
+	s.s26LastScanTime = time.Now()
+	s.mu.Unlock()
+
+	// ۱. اولویت نخست: صفحه ویژه product-list/Doe3z0 با پوشش Lazy Loading تا ۴ صفحه
+	specialCat := "Doe3z0"
+	for page := 1; page <= 4; page++ {
+		s.searchSnappCategoryForS26(specialCat, page, "price_asc")
+		time.Sleep(150 * time.Millisecond)
+	}
+	s.searchSnappCategoryForS26(specialCat, 1, SnappSortDisc)
+	time.Sleep(150 * time.Millisecond)
+
+	// ۲. جستجوی مستقیم ترکیبات مختلف Galaxy S26
 	queries := []string{
 		"galaxy s26",
 		"galaxy s۲۶",
@@ -947,14 +962,130 @@ func (s *ServerState) ScanForGalaxyS26() {
 		"گوشی s۲۶",
 	}
 
-	s.mu.Lock()
-	s.s26ScanCount++
-	s.s26LastScanTime = time.Now()
-	s.mu.Unlock()
-
 	for _, q := range queries {
 		s.searchSnappForS26(q, false)
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// searchSnappCategoryForS26 پایش ویژه دسته‌بندی یا product-list با پشتیبانی از چند صفحه (Lazy Loading)
+func (s *ServerState) searchSnappCategoryForS26(category string, page int, sort string) {
+	snappThrottle()
+
+	u, err := url.Parse(SnappAPIBaseURL)
+	if err != nil {
+		return
+	}
+	urlQ := u.Query()
+	urlQ.Set("lat", s.lat)
+	urlQ.Set("lng", s.lng)
+	u.RawQuery = urlQ.Encode()
+
+	reqBody := SnappSearchBody{
+		Category:    category,
+		Sort:        sort,
+		IsAvailable: true,
+		Page:        page,
+		Skip:        page - 1,
+		Limit:       50,
+	}
+
+	jsonBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return
+	}
+
+	httpReq, err := http.NewRequest("POST", u.String(), bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		return
+	}
+
+	httpReq.Header.Set("User-Agent", UserAgent)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/plain, */*")
+	httpReq.Header.Set("Origin", "https://snappshop.ir")
+	httpReq.Header.Set("Referer", "https://snappshop.ir/product-list/"+category)
+
+	resp, err := s.snappClient.Do(httpReq)
+	atomic.AddInt64(&s.snappReqs, 1)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	var apiResp SnappAPIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return
+	}
+
+	if len(apiResp.Data.Structure) == 0 {
+		return
+	}
+
+	now := time.Now()
+	for _, section := range apiResp.Data.Structure {
+		for _, it := range section.Items {
+			if it.Href == "" || it.Title == "" {
+				continue
+			}
+			rawPrice := it.PriceInfo.DiscountedPrice
+			if rawPrice <= 0 {
+				rawPrice = it.PriceInfo.Price
+			}
+			if rawPrice <= 0 {
+				continue
+			}
+
+			var priceToman int64
+			if rawPrice > 100000000 {
+				priceToman = rawPrice / 10
+			} else if rawPrice > 3000000 && rawPrice <= 30000000 {
+				priceToman = rawPrice
+			} else if rawPrice > 30000000 && rawPrice <= 300000000 {
+				priceToman = rawPrice / 10
+			} else {
+				priceToman = rawPrice
+			}
+
+			disc := it.PriceInfo.Discount
+			if disc == 0 && it.PriceInfo.DiscountPercent > 0 {
+				disc = it.PriceInfo.DiscountPercent
+			}
+
+			fullURL := "https://snappshop.ir" + it.Href
+			fastBuyURL := fullURL + "?quick_buy=1&sniper=s26"
+			img := it.Image.Src
+			if img == "" {
+				img = "https://snappshop.ir/assets/images/placeholder.png"
+			}
+
+			deal := DealItem{
+				ID:              "snp_" + it.ID,
+				Store:           "snapp",
+				StoreName:       "اسنپ‌شاپ",
+				Title:           it.Title,
+				CategoryKey:     "mobile",
+				CategoryName:    "گوشی موبایل",
+				DiscountPercent: disc,
+				PriceToman:      priceToman,
+				OriginalToman:   it.PriceInfo.Price / 10,
+				PriceFormatted:  formatNumber(priceToman),
+				OrigFormatted:   formatNumber(it.PriceInfo.Price / 10),
+				ProductURL:      fullURL,
+				FastBuyURL:      fastBuyURL,
+				ImageURL:        img,
+				FoundAt:         now,
+				FoundTimeStr:    now.Format("15:04:05"),
+			}
+
+			if IsGalaxyS26Phone(it.Title, priceToman) {
+				s.TriggerS26Sniper(deal)
+			}
+		}
 	}
 }
 
