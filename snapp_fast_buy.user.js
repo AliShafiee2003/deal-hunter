@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fast Buy 1-Click for SnappShop (Complete Auto-Checkout to Bank Gateway)
 // @namespace    https://snappshop.ir/
-// @version      4.0
-// @description  خرید خودکار ۱-کلیکه از صفحه محصول تا درگاه بانکی: افزودن به سبد، ثبت سفارش، انتخاب سریعترین ارسال، اولین روز و ساعت، تایید و انتقال به درگاه بانک
+// @version      4.1
+// @description  خرید خودکار ۱-کلیکه از صفحه محصول تا درگاه بانکی: افزودن به سبد، ثبت سفارش، باز کردن تب سریعترین ارسال، انتخاب نزدیک‌ترین روز و ساعت، تایید و انتقال مستقیم به درگاه بانک
 // @match        https://snappshop.ir/*
 // @match        https://www.snappshop.ir/*
 // @run-at       document-start
@@ -19,10 +19,10 @@
     if (isS26Sniper) sessionStorage.setItem('snapp_s26_sniper', '1');
     if (isQuickBuy)  sessionStorage.setItem('snapp_quick_buy', '1');
 
-    if (!isQuickBuy && !isS26Sniper) return; // early exit — no active session
+    if (!isQuickBuy && !isS26Sniper) return;
 
     // -------------------------------------------------------------------------
-    // Audio chime
+    // Audio Chime
     // -------------------------------------------------------------------------
     function playAlertSound(freq = 1100) {
         try {
@@ -42,7 +42,7 @@
     }
 
     // -------------------------------------------------------------------------
-    // Top banner
+    // Banner UI
     // -------------------------------------------------------------------------
     const themeColor = isS26Sniper
         ? 'linear-gradient(90deg, #dc2626, #b91c1c)'
@@ -63,7 +63,7 @@
     }
 
     // -------------------------------------------------------------------------
-    // Helper: find clickable element by text
+    // Element Finder
     // -------------------------------------------------------------------------
     function findByText(keywords, selectors) {
         selectors = selectors || 'button, a[role="button"], div[role="button"], [class*="btn"]';
@@ -79,17 +79,12 @@
         return null;
     }
 
-    // -------------------------------------------------------------------------
-    // Helper: sleep
-    // -------------------------------------------------------------------------
-    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
     // =========================================================================
     // مرحله ۱: صفحه کالا — افزودن به سبد خرید
     // =========================================================================
     if (window.location.pathname.startsWith('/product/')) {
         playAlertSound(880);
-        showBanner('مرحله ۱/۴: در حال افزودن خودکار به سبد خرید...');
+        showBanner('مرحله ۱/۴: افزودن خودکار کالا به سبد خرید...');
 
         let clicked = false;
         function tryAddToCart() {
@@ -100,7 +95,7 @@
                 clicked = true;
                 btn.click();
                 playAlertSound(1320);
-                showBanner('✅ به سبد اضافه شد! در حال انتقال به ثبت سفارش...');
+                showBanner('✅ کالا به سبد اضافه شد! انتقال به مرحله ثبت سبد...');
                 setTimeout(() => {
                     window.location.href = 'https://snappshop.ir/checkout/cart?auto_order=1';
                 }, 350);
@@ -113,11 +108,11 @@
     }
 
     // =========================================================================
-    // مرحله ۲: صفحه سبد — ثبت سفارش
+    // مرحله ۲: صفحه سبد — کلیک ثبت سفارش
     // =========================================================================
     if (window.location.pathname === '/checkout/cart') {
         playAlertSound(980);
-        showBanner('مرحله ۲/۴: در حال ثبت سفارش...');
+        showBanner('مرحله ۲/۴: ثبت سفارش...');
 
         let done = false;
         function tryOrder() {
@@ -142,150 +137,127 @@
     }
 
     // =========================================================================
-    // مرحله ۳: صفحه ارسال — SEQUENCE: سریعترین ارسال → اولین روز (label) → اولین ساعت (label/radio) → تایید و ادامه
+    // مرحله ۳: صفحه ارسال — SEQUENCE واکنشی و دقیق:
+    // ۱. کلیک و باز کردن بخش «سریع‌ترین ارسال»
+    // ۲. کلیک اولین تاریخ در دسترس (دوشنبه، فردا و...)
+    // ۳. کلیک اولین ساعت در دسترس (۱۱ الی ۱۴ و...)
+    // ۴. کلیک دکمه «تایید و ادامه»
     // =========================================================================
     if (window.location.pathname.includes('/checkout/shipping')) {
         playAlertSound(1100);
-        showBanner('مرحله ۳/۴: انتخاب خودکار سریعترین ارسال...');
+        showBanner('مرحله ۳/۴: در حال هماهنگی زمان ارسال (Shipping)...');
 
-        // State machine: 0=click fastest tab, 1=pick day, 2=pick time, 3=confirm
-        let phase = 0;
-        let phaseTs = Date.now();
-        let continueClicked = false;
+        let lastFastestClick = 0;
+        let daySelected = false;
+        let timeSelected = false;
+        let confirmClicked = false;
 
-        function phaseDelay(ms) {
-            // only advance phase after a minimum delay so React can re-render
-            return Date.now() - phaseTs >= ms;
+        // تابع پیدا کردن تب/کارت سریع‌ترین ارسال
+        function getFastestShippingElement() {
+            const all = Array.from(document.querySelectorAll('div, label, section, button'));
+            for (const el of all) {
+                const txt = (el.textContent || '').trim();
+                if ((txt.includes('سریع‌ترین ارسال') || txt.includes('سریعترین ارسال')) && txt.length < 80) {
+                    return el;
+                }
+            }
+            return null;
         }
 
-        function runShipping() {
-            if (continueClicked) return;
+        // تابع پیدا کردن اولین کارت تاریخ
+        function getFirstDayCard() {
+            const all = Array.from(document.querySelectorAll('label, div, button'));
+            return all.find(el => {
+                const txt = (el.textContent || '').trim();
+                return /فردا|دوشنبه|سه.?شنبه|چهارشنبه|پنجشنبه|جمعه|شنبه|یکشنبه/.test(txt)
+                    && txt.length < 40
+                    && el.children.length <= 4
+                    && !el.classList.contains('disabled')
+                    && !el.closest('[class*="disabled"]');
+            }) || null;
+        }
 
-            // ── Phase 0: کلیک روی تب «سریعترین ارسال» ───────────────────────
-            if (phase === 0) {
-                const fastTab = findByText(
-                    ['سریع‌ترین ارسال', 'سریعترین ارسال', 'سریع ترین ارسال'],
-                    'button, div[role="button"], label, div[class*="tab"], div[class*="chip"]'
-                );
-                if (fastTab) {
-                    fastTab.click();
-                    phase = 1;
-                    phaseTs = Date.now();
-                    showBanner('مرحله ۳/۴: سریعترین ارسال انتخاب شد — در حال انتخاب نزدیک‌ترین تاریخ...');
-                }
-                // also try to continue even if tab not found (maybe already on fastest)
-                else if (phaseDelay(1200)) {
-                    phase = 1;
-                    phaseTs = Date.now();
-                }
-                return;
-            }
+        // تابع پیدا کردن اولین بازه ساعتی
+        function getFirstTimeSlot() {
+            const all = Array.from(document.querySelectorAll('label, div, span, button'));
+            return all.find(el => {
+                const txt = (el.textContent || '').trim();
+                return /\d+\s*الی\s*\d+/.test(txt)
+                    && txt.length < 50
+                    && el.children.length <= 3
+                    && !el.classList.contains('disabled')
+                    && !el.closest('[class*="disabled"]');
+            }) || null;
+        }
 
-            // ── Phase 1: انتخاب اولین روز فعال — target <label> elements ─────
-            if (phase === 1 && phaseDelay(400)) {
-                // Target label elements that contain day names (فردا / دوشنبه / ...)
-                const dayLabels = Array.from(document.querySelectorAll('label')).filter(el => {
-                    const txt = (el.textContent || '').trim();
-                    return /فردا|دوشنبه|سه.?شنبه|چهارشنبه|پنجشنبه|جمعه|شنبه|یکشنبه/.test(txt)
-                        && txt.length < 60
-                        && !el.classList.contains('disabled')
-                        && !el.closest('[class*="disabled"]')
-                        && !el.closest('[aria-disabled="true"]');
-                });
+        // تابع پیدا کردن دکمه تایید و ادامه
+        function getConfirmButton() {
+            return findByText(['تایید و ادامه', 'ادامه و تایید', 'ادامه جهت پرداخت']);
+        }
 
-                // Fallback: div/button with day name and reasonable text length
-                const dayFallback = dayLabels.length === 0
-                    ? Array.from(document.querySelectorAll('div, button')).filter(el => {
-                        const txt = (el.textContent || '').trim();
-                        return /فردا|دوشنبه|سه.?شنبه|چهارشنبه|پنجشنبه|جمعه|شنبه|یکشنبه/.test(txt)
-                            && txt.length < 50
-                            && el.children.length <= 4
-                            && !el.classList.contains('disabled')
-                            && !el.closest('[class*="disabled"]');
-                    })
-                    : [];
+        function runShippingReactive() {
+            if (confirmClicked) return;
 
-                const dayEls = dayLabels.length > 0 ? dayLabels : dayFallback;
-                if (dayEls.length > 0) {
-                    dayEls[0].click();
-                    phase = 2;
-                    phaseTs = Date.now();
-                    showBanner('مرحله ۳/۴: تاریخ ارسال انتخاب شد — در حال انتخاب اولین ساعت...');
-                }
-                return;
-            }
-
-            // ── Phase 2: انتخاب اولین ساعت — label > radio > div ─────────────
-            if (phase === 2 && phaseDelay(400)) {
-                // 1. Try label elements matching time ranges like «۱۱ الی ۱۴»
-                const timeLabels = Array.from(document.querySelectorAll('label')).filter(el => {
-                    const txt = (el.textContent || '').trim();
-                    return /\d+\s*الی\s*\d+/.test(txt)
-                        && txt.length < 60
-                        && !el.classList.contains('disabled')
-                        && !el.closest('[class*="disabled"]')
-                        && !el.closest('[aria-disabled="true"]');
-                });
-
-                if (timeLabels.length > 0) {
-                    timeLabels[0].click();
-                    phase = 3;
-                    phaseTs = Date.now();
-                    showBanner('مرحله ۳/۴: ساعت ارسال انتخاب شد — در حال تایید...');
-                    return;
-                }
-
-                // 2. Fallback: enabled radio buttons
-                const radios = Array.from(document.querySelectorAll('input[type="radio"]:not(:disabled)'));
-                if (radios.length > 0) {
-                    radios[0].click();
-                    if (!radios[0].checked) {
-                        radios[0].checked = true;
-                        radios[0].dispatchEvent(new Event('change', { bubbles: true }));
+            // گام ۴: اگر دکمه «تایید و ادامه» ظاهر شده و ساعت انتخاب شده، کلیک کن!
+            const confirmBtn = getConfirmButton();
+            if (confirmBtn && timeSelected) {
+                confirmClicked = true;
+                confirmBtn.click();
+                playAlertSound(1500);
+                showBanner('✅ زمان ارسال تایید شد! انتقال به درگاه پرداخت...');
+                setTimeout(() => {
+                    if (!window.location.pathname.includes('/payment')) {
+                        window.location.href = 'https://snappshop.ir/checkout/payment?auto_pay=1';
                     }
-                    phase = 3;
-                    phaseTs = Date.now();
-                    showBanner('مرحله ۳/۴: ساعت ارسال انتخاب شد — در حال تایید...');
-                    return;
-                }
-
-                // 3. Fallback: div/span with time range text
-                const timeEl = Array.from(document.querySelectorAll('div, span')).find(el => {
-                    const txt = (el.textContent || '').trim();
-                    return /\d+\s*الی\s*\d+/.test(txt)
-                        && txt.length < 40
-                        && el.children.length <= 3
-                        && !el.closest('[class*="disabled"]');
-                });
-                if (timeEl) {
-                    timeEl.click();
-                    phase = 3;
-                    phaseTs = Date.now();
-                    showBanner('مرحله ۳/۴: ساعت ارسال انتخاب شد — در حال تایید...');
-                }
+                }, 800);
                 return;
             }
 
-            // ── Phase 3: تایید و ادامه ────────────────────────────────────────
-            if (phase === 3 && phaseDelay(500)) {
-                const confirmBtn = findByText(['تایید و ادامه', 'ادامه و تایید', 'ادامه جهت پرداخت']);
-                if (confirmBtn && !confirmBtn.disabled && !confirmBtn.classList.contains('disabled')) {
-                    continueClicked = true;
-                    confirmBtn.click();
-                    playAlertSound(1500);
-                    showBanner('✅ زمان ارسال تایید شد! انتقال به صفحه پرداخت...');
-                    setTimeout(() => {
-                        if (!window.location.pathname.includes('/payment')) {
-                            window.location.href = 'https://snappshop.ir/checkout/payment?auto_pay=1';
-                        }
-                    }, 900);
+            // گام ۳: انتخاب اولین ساعت آزاد
+            const timeSlot = getFirstTimeSlot();
+            if (timeSlot && !timeSelected) {
+                timeSlot.click();
+                const radio = timeSlot.querySelector('input[type="radio"]') ||
+                              timeSlot.closest('label')?.querySelector('input[type="radio"]');
+                if (radio) {
+                    radio.checked = true;
+                    radio.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                timeSelected = true;
+                showBanner('مرحله ۳/۴: ساعت ارسال انتخاب شد — در انتظار دکمه تایید و ادامه...');
+                return;
+            }
+
+            // گام ۲: انتخاب اولین تاریخ آزاد
+            const dayCard = getFirstDayCard();
+            if (dayCard && !daySelected) {
+                dayCard.click();
+                daySelected = true;
+                showBanner('مرحله ۳/۴: روز ارسال انتخاب شد — در حال بارگذاری ساعت‌های ارسال...');
+                return;
+            }
+
+            // گام ۱: باز کردن تب سریع‌ترین ارسال (اگر روزها هنوز در صفحه نیستند)
+            if (!dayCard && (Date.now() - lastFastestClick > 500)) {
+                const fastestEl = getFastestShippingElement();
+                if (fastestEl) {
+                    lastFastestClick = Date.now();
+                    fastestEl.click();
+                    // کلیک روی رادیوباتن داخل آن در صورت وجود
+                    const innerRadio = fastestEl.querySelector('input[type="radio"]');
+                    if (innerRadio) {
+                        innerRadio.click();
+                        innerRadio.checked = true;
+                        innerRadio.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                    showBanner('مرحله ۳/۴: تب سریع‌ترین ارسال باز شد — در حال انتخاب تاریخ...');
                 }
             }
         }
 
-        const iv = setInterval(runShipping, 60);
-        new MutationObserver(runShipping).observe(document.documentElement, { childList: true, subtree: true });
-        setTimeout(() => clearInterval(iv), 20000);
+        const iv = setInterval(runShippingReactive, 50);
+        new MutationObserver(runShippingReactive).observe(document.documentElement, { childList: true, subtree: true });
+        setTimeout(() => clearInterval(iv), 25000);
     }
 
     // =========================================================================
@@ -293,7 +265,7 @@
     // =========================================================================
     if (window.location.pathname.includes('/checkout/payment')) {
         playAlertSound(1200);
-        showBanner('مرحله ۴/۴: در حال کلیک روی پرداخت از طریق درگاه بانکی...');
+        showBanner('مرحله ۴/۴: در حال انتقال به درگاه بانکی شاپرک...');
 
         let done = false;
         function tryPay() {
@@ -302,7 +274,8 @@
                 'پرداخت از طریق درگاه بانکی',
                 'پرداخت از طریق درگاه',
                 'پرداخت اینترنتی',
-                'پرداخت آنلاین'
+                'پرداخت آنلاین',
+                'پرداخت'
             ]);
             if (btn && !btn.disabled && !btn.classList.contains('disabled')) {
                 done = true;
@@ -310,7 +283,7 @@
                 sessionStorage.removeItem('snapp_s26_sniper');
                 btn.click();
                 playAlertSound(1760);
-                showBanner('🚀 انتقال به درگاه بانکی! لطفاً رمز پویا و اطلاعات کارت را وارد کنید.',
+                showBanner('🚀 در حال اتصال به درگاه بانکی شاپرک! لطفا رمز پویا را وارد فرمایید.',
                     'linear-gradient(90deg, #16a34a, #15803d)');
             }
         }
