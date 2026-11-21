@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -255,18 +256,24 @@ type DealItem struct {
 }
 
 type ServerState struct {
-	mu           sync.RWMutex
-	deals        map[string]DealItem
-	lastScanTime time.Time
-	scanCount    int
-	intervalSec  int
-	isScanning   bool
-	lat          string
-	lng          string
-	snappClient  *http.Client
-	snappReqs    int64
-	snapp429     int64
-	dkClient     *http.Client
+	mu               sync.RWMutex
+	deals            map[string]DealItem
+	lastScanTime     time.Time
+	scanCount        int
+	intervalSec      int
+	isScanning       bool
+	lat              string
+	lng              string
+	snappClient      *http.Client
+	snappReqs        int64
+	snapp429         int64
+	dkClient         *http.Client
+	s26SniperActive  bool
+	s26LastScanTime  time.Time
+	s26ScanCount     int64
+	s26FoundDeals    []DealItem
+	s26TriggeredURLs map[string]bool
+	s26MaxPriceToman int64
 }
 
 func NewServerState(intervalSec int, lat, lng string) *ServerState {
@@ -284,12 +291,16 @@ func NewServerState(intervalSec int, lat, lng string) *ServerState {
 	}
 
 	return &ServerState{
-		deals:       make(map[string]DealItem),
-		intervalSec: intervalSec,
-		lat:         lat,
-		lng:         lng,
-		snappClient: &http.Client{Transport: tr, Timeout: 12 * time.Second},
-		dkClient:    &http.Client{Transport: dkTr, Jar: dkJar, Timeout: 12 * time.Second},
+		deals:            make(map[string]DealItem),
+		intervalSec:      intervalSec,
+		lat:              lat,
+		lng:              lng,
+		snappClient:      &http.Client{Transport: tr, Timeout: 12 * time.Second},
+		dkClient:         &http.Client{Transport: dkTr, Jar: dkJar, Timeout: 12 * time.Second},
+		s26SniperActive:  true,
+		s26FoundDeals:    make([]DealItem, 0),
+		s26TriggeredURLs: make(map[string]bool),
+		s26MaxPriceToman: 30000000,
 	}
 }
 
@@ -791,8 +802,253 @@ func (s *ServerState) RunScan() {
 	wg.Wait()
 }
 
+// --- Galaxy S26 Dedicated Sniper Engine ---
+
+// IsGalaxyS26Phone determines whether a product is a genuine Samsung Galaxy S26 phone under 30 million Tomans.
+func IsGalaxyS26Phone(title string, priceToman int64) bool {
+	titleLower := strings.ToLower(title)
+
+	// 1. Price check: Under 30,000,000 Toman, and above 3,000,000 Toman (sanity floor)
+	actualToman := priceToman
+	if actualToman > 100000000 {
+		actualToman = actualToman / 10
+	}
+	if actualToman > 30000000 || actualToman < 3000000 {
+		return false
+	}
+
+	// 2. Reject accessories
+	if strings.Contains(title, "مناسب") {
+		return false
+	}
+	words := strings.Fields(title)
+	if len(words) > 0 {
+		firstWord := words[0]
+		for _, acc := range []string{"کاور", "قاب", "گلس", "محافظ", "کیف", "بند", "شارژر", "کابل", "برچسب", "هولدر", "پایه", "لنز"} {
+			if strings.HasPrefix(firstWord, acc) {
+				return false
+			}
+		}
+	}
+
+	// 3. Must be a phone: contains "گوشی" or "موبایل" or "phone" or "smartphone"
+	isPhone := false
+	for _, pw := range []string{"گوشی", "موبایل", "phone", "smartphone"} {
+		if strings.Contains(titleLower, pw) {
+			isPhone = true
+			break
+		}
+	}
+	if !isPhone {
+		return false
+	}
+
+	// 4. Must relate to Samsung or Galaxy
+	hasBrand := false
+	for _, b := range []string{"samsung", "galaxy", "سامسونگ", "گلکسی"} {
+		if strings.Contains(titleLower, b) {
+			hasBrand = true
+			break
+		}
+	}
+	if !hasBrand {
+		return false
+	}
+
+	// 5. Match S26 model in English or Persian (s26, s-26, s 26, اس ۲۶, اس26, اس 26)
+	matched, _ := regexp.MatchString(`(?i)(?:\bs[- ]?26\b|اس\s*[۲2][۶6]|s\s*26)`, title)
+	return matched
+}
+
+func (s *ServerState) StartS26Sniper() {
+	go func() {
+		time.Sleep(2 * time.Second)
+		fmt.Println("🎯 [S26 Sniper] Dedicated Galaxy S26 background monitor started (interval: 15s, max price: 30M Toman)...")
+		for {
+			s.ScanForGalaxyS26()
+			time.Sleep(15 * time.Second)
+		}
+	}()
+}
+
+func (s *ServerState) ScanForGalaxyS26() {
+	queries := []string{
+		"galaxy s26",
+		"گلکسی s26",
+		"سامسونگ s26",
+		"s26",
+		"گوشی s26",
+	}
+
+	s.mu.Lock()
+	s.s26ScanCount++
+	s.s26LastScanTime = time.Now()
+	s.mu.Unlock()
+
+	for _, q := range queries {
+		s.searchSnappForS26(q, false)
+		time.Sleep(400 * time.Millisecond)
+	}
+}
+
+func (s *ServerState) searchSnappForS26(query string, hasDiscount bool) {
+	snappThrottle()
+
+	u, err := url.Parse(SnappAPIBaseURL)
+	if err != nil {
+		return
+	}
+	urlQ := u.Query()
+	urlQ.Set("lat", s.lat)
+	urlQ.Set("lng", s.lng)
+	u.RawQuery = urlQ.Encode()
+
+	reqBody := SnappSearchBody{
+		Query:       query,
+		Sort:        "price_asc",
+		IsAvailable: true,
+		HasDiscount: hasDiscount,
+		Page:        1,
+		Skip:        0,
+		Limit:       50,
+	}
+
+	jsonBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return
+	}
+
+	httpReq, err := http.NewRequest("POST", u.String(), bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		return
+	}
+
+	httpReq.Header.Set("User-Agent", UserAgent)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/plain, */*")
+	httpReq.Header.Set("Origin", "https://snappshop.ir")
+	httpReq.Header.Set("Referer", "https://snappshop.ir/")
+
+	resp, err := s.snappClient.Do(httpReq)
+	atomic.AddInt64(&s.snappReqs, 1)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	var apiResp SnappAPIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return
+	}
+
+	if len(apiResp.Data.Structure) == 0 {
+		return
+	}
+
+	items := apiResp.Data.Structure[0].Items
+	now := time.Now()
+
+	for _, it := range items {
+		if it.Href == "" || it.Title == "" {
+			continue
+		}
+
+		rawPrice := it.PriceInfo.DiscountedPrice
+		if rawPrice <= 0 {
+			rawPrice = it.PriceInfo.Price
+		}
+		if rawPrice <= 0 {
+			continue
+		}
+
+		var priceToman int64
+		if rawPrice > 100000000 {
+			priceToman = rawPrice / 10
+		} else if rawPrice > 3000000 && rawPrice <= 30000000 {
+			priceToman = rawPrice
+		} else if rawPrice > 30000000 && rawPrice <= 300000000 {
+			priceToman = rawPrice / 10
+		} else {
+			priceToman = rawPrice
+		}
+
+		disc := it.PriceInfo.Discount
+		if disc == 0 && it.PriceInfo.DiscountPercent > 0 {
+			disc = it.PriceInfo.DiscountPercent
+		}
+
+		fullURL := "https://snappshop.ir" + it.Href
+		fastBuyURL := fullURL + "?quick_buy=1&sniper=s26"
+		img := it.Image.Src
+		if img == "" {
+			img = "https://snappshop.ir/assets/images/placeholder.png"
+		}
+
+		deal := DealItem{
+			ID:              "snp_" + it.ID,
+			Store:           "snapp",
+			StoreName:       "اسنپ‌شاپ",
+			Title:           it.Title,
+			CategoryKey:     "mobile",
+			CategoryName:    "گوشی موبایل",
+			DiscountPercent: disc,
+			PriceToman:      priceToman,
+			OriginalToman:   it.PriceInfo.Price / 10,
+			PriceFormatted:  formatNumber(priceToman),
+			OrigFormatted:   formatNumber(it.PriceInfo.Price / 10),
+			ProductURL:      fullURL,
+			FastBuyURL:      fastBuyURL,
+			ImageURL:        img,
+			FoundAt:         now,
+			FoundTimeStr:    now.Format("15:04:05"),
+		}
+
+		if IsGalaxyS26Phone(it.Title, priceToman) {
+			s.TriggerS26Sniper(deal)
+		}
+	}
+}
+
+func (s *ServerState) TriggerS26Sniper(deal DealItem) {
+	s.mu.Lock()
+	if s.s26TriggeredURLs[deal.ProductURL] {
+		s.mu.Unlock()
+		return
+	}
+	s.s26TriggeredURLs[deal.ProductURL] = true
+	s.s26FoundDeals = append([]DealItem{deal}, s.s26FoundDeals...)
+	s.deals[deal.ProductURL] = deal
+	s.mu.Unlock()
+
+	fmt.Println("\n=======================================================")
+	fmt.Println("🚨🚨🚨 [S26 SNIPER ALERT] GALAXY S26 DETECTED UNDER 30M TOMAN! 🚨🚨🚨")
+	fmt.Printf("📦 عنوان: %s\n", deal.Title)
+	fmt.Printf("💰 قیمت: %s تومان\n", deal.PriceFormatted)
+	fmt.Printf("🔗 لینک خرید سریع: %s\n", deal.FastBuyURL)
+	fmt.Println("⚡ در حال باز کردن فوری مرورگر و افزودن به سبد خرید...")
+	fmt.Println("=======================================================\n")
+
+	if runtime.GOOS == "windows" {
+		exec.Command("cmd", "/c", "start", deal.FastBuyURL).Start()
+	}
+
+	go func() {
+		for i := 0; i < 5; i++ {
+			if runtime.GOOS == "windows" {
+				exec.Command("powershell", "-Command", "[console]::beep(1200, 300); [console]::beep(1800, 400)").Run()
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
+	}()
+}
+
 func (s *ServerState) StartBackgroundCrawler() {
 	s.LoadCache()
+	s.StartS26Sniper()
 	ticker := time.NewTicker(time.Duration(s.intervalSec) * time.Second)
 	go func() {
 		s.RunScan()
@@ -1485,6 +1741,87 @@ const indexHTML = `<!DOCTYPE html>
             color: #94a3b8;
             font-size: 13px;
         }
+
+        .banner-sniper {
+            background: linear-gradient(135deg, rgba(220, 38, 38, 0.15), rgba(185, 28, 28, 0.25));
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            border-radius: 12px;
+            padding: 12px 18px;
+            margin-top: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .sniper-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .sniper-badge-pulse {
+            background: #ef4444;
+            color: #fff;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 700;
+            box-shadow: 0 0 12px rgba(239, 68, 68, 0.6);
+            animation: pulseRed 2s infinite;
+        }
+        @keyframes pulseRed {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+        .sniper-info {
+            font-size: 13px;
+            color: #fca5a5;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .sniper-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .sniper-status-pill {
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            color: #cbd5e1;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            background: #22c55e;
+            border-radius: 50%;
+            display: inline-block;
+            box-shadow: 0 0 8px #22c55e;
+        }
+        .btn-sniper-test {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 2px 10px rgba(239, 68, 68, 0.4);
+        }
+        .btn-sniper-test:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
     </style>
 </head>
 <body>
@@ -1528,8 +1865,26 @@ const indexHTML = `<!DOCTYPE html>
                 اسکریپت تمپرمونکی برای اسنپ‌شاپ و دیجی‌کالا فعال شد! با کلیک روی هر دکمه، کالا خودکار به سبد اضافه و مستقیماً به صفحه انتخاب آدرس می‌رود.
             </div>
             <a href="/snapp_fast_buy.user.js" target="_blank" class="btn-script">
-                📥 نصب / آپدیت اسکریپت خرید ۱-کلیکه
+                📥 نصب / آپدیت اسکریپت خرید ۱-کلیکه (نسخه ۲.۵ مجهز به اسنایپر S26)
             </a>
+        </div>
+
+        <!-- Galaxy S26 Dedicated Sniper Box -->
+        <div class="banner-sniper">
+            <div class="sniper-left">
+                <div class="sniper-badge-pulse">🎯 اسنایپر هوشمند Galaxy S26</div>
+                <div class="sniper-info">
+                    <strong>پایش اختصاصی اسنپ‌شاپ برای گوشی سامسونگ Galaxy S26 (عادی / پلاس / اولترا):</strong>
+                    <span>فرکانس: هر ۱۵ ثانیه | شرط خودکار: <strong>قیمت زیر ۳۰,۰۰۰,۰۰۰ تومان</strong> | اقدام: باز کردن فوری مرورگر، افزودن خودکار به سبد و انتقال به شیپینگ + آلارم صوتی</span>
+                </div>
+            </div>
+            <div class="sniper-actions">
+                <div class="sniper-status-pill">
+                    <span class="live-dot"></span>
+                    <span>اسکن S26: <strong id="s26ScanCount" style="color: #38bdf8;">0</strong> بار</span>
+                </div>
+                <button onclick="triggerS26Test()" class="btn-sniper-test">⚡ تست شبیه‌ساز خرید S26</button>
+            </div>
         </div>
     </header>
 
@@ -1702,6 +2057,10 @@ const indexHTML = `<!DOCTYPE html>
                 document.getElementById('snappDealCount').innerText = (data.snapp_deals || 0).toLocaleString();
                 document.getElementById('dkDealCount').innerText = (data.dk_deals || 0).toLocaleString();
                 document.getElementById('totalDealCount').innerText = (data.total_deals || 0).toLocaleString();
+                if (data.s26_scan_count !== undefined) {
+                    const s26El = document.getElementById('s26ScanCount');
+                    if (s26El) s26El.innerText = data.s26_scan_count.toLocaleString();
+                }
                 if (data.cat_counts) {
                     document.querySelectorAll('.tab-btn').forEach(btn => {
                         const cat = btn.getAttribute('data-cat');
@@ -1943,6 +2302,16 @@ const indexHTML = `<!DOCTYPE html>
             }
         }
 
+        async function triggerS26Test() {
+            if (confirm("آیا مایلید تست اسنایپر S26 را اجرا کنید؟\nمرورگر با محصول تستی باز شده و افزونه تمپرمونکی آن را در کسری از ثانیه به سبد اضافه کرده و به صفحه شیپینگ می‌برد.")) {
+                try {
+                    await fetch('/api/sniper/test', { method: 'POST' });
+                } catch(e) {
+                    console.error(e);
+                }
+            }
+        }
+
         setInterval(() => {
             countdownSec--;
             if (countdownSec <= 0) {
@@ -2041,17 +2410,40 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"scan_count":     state.scanCount,
-			"last_scan_time": state.lastScanTime.Format("15:04:05"),
-			"is_scanning":    state.isScanning,
-			"total_deals":    len(state.deals),
-			"snapp_deals":    snappCount,
-			"dk_deals":       dkCount,
-			"cat_counts":     catCounts,
-			"interval_sec":   state.intervalSec,
-			"snapp_requests": atomic.LoadInt64(&state.snappReqs),
-			"snapp_429":      atomic.LoadInt64(&state.snapp429),
+			"scan_count":        state.scanCount,
+			"last_scan_time":    state.lastScanTime.Format("15:04:05"),
+			"is_scanning":       state.isScanning,
+			"total_deals":       len(state.deals),
+			"snapp_deals":       snappCount,
+			"dk_deals":          dkCount,
+			"cat_counts":        catCounts,
+			"interval_sec":      state.intervalSec,
+			"snapp_requests":    atomic.LoadInt64(&state.snappReqs),
+			"snapp_429":         atomic.LoadInt64(&state.snapp429),
+			"s26_sniper_active": state.s26SniperActive,
+			"s26_scan_count":    state.s26ScanCount,
+			"s26_last_scan":     state.s26LastScanTime.Format("15:04:05"),
+			"s26_found_count":   len(state.s26FoundDeals),
 		})
+	})
+
+	http.HandleFunc("/api/sniper/test", func(w http.ResponseWriter, r *http.Request) {
+		testDeal := DealItem{
+			ID:             "snp_test_s26",
+			Store:          "snapp",
+			StoreName:      "اسنپ‌شاپ",
+			Title:          "گوشی موبایل سامسونگ مدل Galaxy S26 Ultra دو سیم کارت ظرفیت 256 گیگابایت (تست اسنایپر)",
+			PriceToman:     28500000,
+			PriceFormatted: "28,500,000",
+			ProductURL:     "https://snappshop.ir/product/snp-533616199",
+			FastBuyURL:     "https://snappshop.ir/product/snp-533616199?quick_buy=1&sniper=s26",
+			ImageURL:       "https://snappshop.ir/assets/images/placeholder.png",
+			FoundAt:        time.Now(),
+			FoundTimeStr:   time.Now().Format("15:04:05"),
+		}
+		go state.TriggerS26Sniper(testDeal)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Write([]byte(`{"status":"triggered_s26_test"}`))
 	})
 
 	http.HandleFunc("/api/trigger", func(w http.ResponseWriter, r *http.Request) {
