@@ -753,56 +753,8 @@ func (s *ServerState) mergeFetchedBatch(items []DealItem) {
 
 // --- Run Scan for Both Stores ---
 func (s *ServerState) RunScan() {
-	s.mu.Lock()
-	if s.isScanning {
-		s.mu.Unlock()
-		return
-	}
-	s.isScanning = true
-	s.mu.Unlock()
-
-	defer func() {
-		s.SaveCache()
-		s.mu.Lock()
-		s.isScanning = false
-		s.lastScanTime = time.Now()
-		s.scanCount++
-		s.mu.Unlock()
-	}()
-
-	var wg sync.WaitGroup
-
-	for _, target := range TargetConfigs {
-		// Snapp goroutine (only if target has SnappCat, SnappQuery, or is the "all" target)
-		if target.SnappCat != "" || target.SnappQuery != "" || target.Key == "all" {
-			wg.Add(1)
-			go func(t CrawlTarget) {
-				defer wg.Done()
-				snappSem <- struct{}{}
-				defer func() { <-snappSem }()
-				items, err := s.FetchSnappTarget(t)
-				if err == nil && len(items) > 0 {
-					s.mergeFetchedBatch(items)
-				}
-			}(target)
-		}
-
-		// Digikala goroutine (only if target has DkCatID or DkQuery)
-		if target.DkCatID > 0 || target.DkQuery != "" {
-			wg.Add(1)
-			go func(t CrawlTarget) {
-				defer wg.Done()
-				dkSem <- struct{}{}
-				defer func() { <-dkSem }()
-				items, err := s.FetchDigikalaTarget(t)
-				if err == nil && len(items) > 0 {
-					s.mergeFetchedBatch(items)
-				}
-			}(target)
-		}
-	}
-
-	wg.Wait()
+	// اختصاص ۱۰۰٪ منابع به اسنایپر Galaxy S26 - پایش عمومی کاملاً غیرفعال است
+	s.ScanForGalaxyS26()
 }
 
 // --- Galaxy S26 Dedicated Sniper Engine ---

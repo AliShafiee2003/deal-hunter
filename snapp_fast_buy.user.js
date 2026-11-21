@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fast Buy 1-Click for SnappShop (Complete Auto-Checkout to Bank Gateway)
 // @namespace    https://snappshop.ir/
-// @version      4.4
-// @description  اسنایپر هوشمند Galaxy S26: رصد مداوم و پیوسته لیست کالاها با اسکرول لیزی‌لود و رفرش هر ۱۰ ثانیه، افزودن خودکار به سبد، ثبت سفارش، انتخاب سریعترین ارسال و اتصال مستقیم به درگاه بانکی
+// @version      4.5
+// @description  اسنایپر هوشمند Galaxy S26: رصد مداوم لیست کالاها با اسکرول عمیق ۲ برابری لیزی‌لود و رفرش هر ۱۰ ثانیه، افزودن خودکار به سبد، ثبت سفارش، انتخاب سریعترین ارسال و اتصال مستقیم به درگاه بانکی
 // @match        https://snappshop.ir/*
 // @match        https://www.snappshop.ir/*
 // @run-at       document-start
@@ -159,11 +159,11 @@
         function automateListPage() {
             if (s26Found) return;
 
-            showBanner(`🔥 اسنایپر مداوم فعال است: اسکرول لیزی‌لود و رفرش هر ۱۰ ثانیه تا دستور توقف...`);
+            showBanner(`🔥 اسنایپر مداوم فعال است: اسکرول عمیق ۲ برابری لیزی‌لود و رفرش هر ۱۰ ثانیه...`);
 
-            // ۱. اسکرول مرحله‌ای به پایین برای تحریک لود کالاهای جدید
+            // ۱. اسکرول عمیق و پرشتاب به پایین (۲ برابر مقدار قبلی) برای باز کردن فوری تمام لایه‌های لیزی‌لود
             scrollStep++;
-            const scrollPositions = [800, 1800, 3200, 5000, document.body.scrollHeight];
+            const scrollPositions = [1800, 3600, 6500, 10000, document.body.scrollHeight];
             const targetY = scrollPositions[scrollStep % scrollPositions.length] || document.body.scrollHeight;
             window.scrollTo({ top: targetY, behavior: 'smooth' });
 
@@ -177,7 +177,7 @@
             }
         }
 
-        setInterval(automateListPage, 1200);
+        setInterval(automateListPage, 700);
     }
 
     // =========================================================================
