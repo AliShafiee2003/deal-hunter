@@ -869,32 +869,25 @@ func (s *ServerState) ScanForGalaxyS26() {
 	s.s26LastScanTime = time.Now()
 	s.mu.Unlock()
 
-	// ۱. اولویت نخست: صفحه ویژه product-list/Doe3z0 با پوشش Lazy Loading تا ۴ صفحه
+	// پایش ۱۰۰٪ انحصاری و عمیق فقط صفحه ویژه https://snappshop.ir/product-list/Doe3z0
 	specialCat := "Doe3z0"
-	for page := 1; page <= 4; page++ {
+
+	// ۱. مرتب‌سازی بر اساس ارزان‌ترین (price_asc) - تا ۶ صفحه (پوشش تا ۳۰۰ کالا)
+	for page := 1; page <= 6; page++ {
 		s.searchSnappCategoryForS26(specialCat, page, "price_asc")
 		time.Sleep(150 * time.Millisecond)
 	}
-	s.searchSnappCategoryForS26(specialCat, 1, SnappSortDisc)
-	time.Sleep(150 * time.Millisecond)
 
-	// ۲. جستجوی مستقیم ترکیبات مختلف Galaxy S26
-	queries := []string{
-		"galaxy s26",
-		"galaxy s۲۶",
-		"گلکسی s26",
-		"گلکسی s۲۶",
-		"سامسونگ s26",
-		"سامسونگ s۲۶",
-		"s26",
-		"s۲۶",
-		"گوشی s26",
-		"گوشی s۲۶",
+	// ۲. مرتب‌سازی بر اساس بیشترین تخفیف (SnappSortDisc) - ۲ صفحه اول
+	for page := 1; page <= 2; page++ {
+		s.searchSnappCategoryForS26(specialCat, page, SnappSortDisc)
+		time.Sleep(150 * time.Millisecond)
 	}
 
-	for _, q := range queries {
-		s.searchSnappForS26(q, false)
-		time.Sleep(200 * time.Millisecond)
+	// ۳. مرتب‌سازی بر اساس جدیدترین‌ها (newest) - ۲ صفحه اول
+	for page := 1; page <= 2; page++ {
+		s.searchSnappCategoryForS26(specialCat, page, "newest")
+		time.Sleep(150 * time.Millisecond)
 	}
 }
 
