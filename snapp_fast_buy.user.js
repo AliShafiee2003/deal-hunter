@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fast Buy 1-Click for SnappShop (Complete Auto-Checkout to Bank Gateway)
 // @namespace    https://snappshop.ir/
-// @version      5.0
-// @description  اسنایپر متمرکز بر قیمت و تخفیف: رصد خودکار کالای ۹۰٪ تخفیف با قیمت ۴ میلیون و ۴۰۰ هزار تومان، اسکرول عمیق لیزی‌لود و رفرش هر ۱۰ ثانیه، افزودن به سبد، ثبت سفارش، انتخاب سریعترین ارسال و اتصال مستقیم به درگاه بانکی
+// @version      5.1
+// @description  اسنایپر متمرکز بر قیمت و تخفیف: رصد خودکار کالای منحصراً با تخفیف ۹۰٪ (بج بنفش ٪۹۰) و قیمت ۴ میلیون و ۴۰۰ هزار تومان در صفحه ویژه Doe3z0، اسکرول عمیق لیزی‌لود و رفرش هر ۱۰ ثانیه، افزودن به سبد، ثبت سفارش، انتخاب سریعترین ارسال و اتصال مستقیم به درگاه بانکی
 // @match        https://snappshop.ir/*
 // @match        https://www.snappshop.ir/*
 // @run-at       document-start
@@ -15,6 +15,7 @@
     const urlParams = new URLSearchParams(window.location.search);
     const isQuickBuy = urlParams.get('quick_buy') === '1' || sessionStorage.getItem('snapp_quick_buy') === '1';
     const isSniper = urlParams.get('sniper') === 'deal440' || urlParams.get('sniper') === 's26' || sessionStorage.getItem('snapp_sniper') === '1';
+    const isDoe3z0 = window.location.pathname.includes('/product-list/Doe3z0');
     const isProductListPage = window.location.pathname.startsWith('/product-list/');
 
     if (isSniper)   sessionStorage.setItem('snapp_sniper', '1');
@@ -69,65 +70,104 @@
     }
 
     // -------------------------------------------------------------------------
-    // Target Matcher Logic: زوم روی قیمت ۴,۴۰۰,۰۰۰ با تخفیف ۹۰٪
+    // استخراج دقیق درصد تخفیف از برچسب کارت محصول
+    // بررسی بج بنفش/قرمز تخفیف (مانند %70 ، %64 ، %90 ، ٪۹۰)
     // -------------------------------------------------------------------------
-    function isMatchingTargetDeal(title, text) {
-        const norm = normalizeDigits(text).toLowerCase();
-        const unpunctuated = norm.replace(/[,،\s]/g, '');
-
-        // ۱. بررسی تخفیف ۹۰ درصدی (یا حوالی ۸۵ تا ۹۵ درصد)
-        const has90Discount = /90%|90٪|٪90|%90|91%|89%|88%|92%/.test(norm) ||
-                              /تخفیف\s*90|90\s*درصد/.test(norm);
-
-        // ۲. بررسی قیمت ۴ میلیون و ۴۰۰ هزار تومان (4,400,000)
-        // ممکن است به تومان: 4400000 یا به ریال: 44000000 نوشته شده باشد
-        const has44Price = unpunctuated.includes('4400000') ||
-                           unpunctuated.includes('44000000') ||
-                           /\b4400000\b|\b44000000\b/.test(unpunctuated) ||
-                           /4\s*میلیون\s*و\s*400/.test(norm);
-
-        // اگر هم قیمت ۴.۴ میلیون بود و هم تخفیف ۹۰٪، دقیقاً همان است!
-        if (has44Price && has90Discount) {
-            return true;
+    function getCardDiscountPercent(card) {
+        // ۱. بررسی المان‌های برگ (بدون فرزند) داخل کارت محصول
+        const allEls = Array.from(card.querySelectorAll('*'));
+        for (const el of allEls) {
+            if (el.children.length === 0) {
+                const raw = (el.textContent || '').trim();
+                if (raw.includes('%') || raw.includes('٪')) {
+                    const norm = normalizeDigits(raw).replace(/\s+/g, '');
+                    // تطابق الگوهایی مانند %70 یا 70% یا ٪64 یا %90
+                    const m = norm.match(/^[%٪]?(\d{1,2})[%٪]?$/);
+                    if (m) {
+                        const val = parseInt(m[1], 10);
+                        if (val > 0 && val <= 100) {
+                            return val;
+                        }
+                    }
+                }
+            }
         }
 
-        // اگر قیمت ۴.۴ میلیون بود و نشانه تخفیف هم داشت
-        if (has44Price && (norm.includes('تخفیف') || norm.includes('%') || norm.includes('٪'))) {
-            return true;
+        // ۲. پشتیبانی از کلاس‌های مربوط به بج تخفیف
+        const badgeEl = card.querySelector('[class*="badge"], [class*="discount"], [class*="percent"], [class*="tag"]');
+        if (badgeEl) {
+            const raw = normalizeDigits(badgeEl.textContent || '').replace(/\s+/g, '');
+            const m = raw.match(/(\d{1,2})[%٪]|[%٪](\d{1,2})/);
+            if (m) {
+                const val = parseInt(m[1] || m[2], 10);
+                if (val > 0 && val <= 100) return val;
+            }
         }
 
-        // بررسی بر اساس استخراج تمام اعداد متن
-        const numbers = norm.replace(/,/g, '').match(/\d{5,10}/g);
+        // ۳. بررسی کلی روی متن کارت به عنوان آخرین راهکار
+        const fullNorm = normalizeDigits(card.textContent || '').replace(/\s+/g, '');
+        const generalMatch = fullNorm.match(/[%٪](\d{1,2})|(\d{1,2})[%٪]/);
+        if (generalMatch) {
+            const val = parseInt(generalMatch[1] || generalMatch[2], 10);
+            if (val > 0 && val <= 100) return val;
+        }
+
+        return 0;
+    }
+
+    // -------------------------------------------------------------------------
+    // استخراج دقیق قیمت نهایی فروش از کارت محصول
+    // بررسی ۴,۴۰۰,۰۰۰ تومان (یا معادل ریال ۴۴,۰۰۰,۰۰۰)
+    // -------------------------------------------------------------------------
+    function getCardPrice(card) {
+        const raw = normalizeDigits(card.textContent || '');
+        const clean = raw.replace(/[,،\s]/g, '');
+
+        // ۱. تطابق مستقیم ۴,۴۰۰,۰۰۰ تومان یا ۴۴,۰۰۰,۰۰۰ ریال
+        if (clean.includes('4400000') || clean.includes('44000000')) {
+            return 4400000;
+        }
+
+        // ۲. بررسی تمام اعداد ۶ رقمی به بالا
+        const numbers = clean.match(/\d{6,10}/g);
         if (numbers) {
-            let foundPrice = false;
-            let foundDisc = has90Discount;
-
             for (const numStr of numbers) {
-                let n = parseInt(numStr, 10);
-                if (n === 90 || (n >= 88 && n <= 95 && numStr.length <= 2)) {
-                    foundDisc = true;
+                const n = parseInt(numStr, 10);
+                // بازه تومان: ۴,۳۵۰,۰۰۰ تا ۴,۴۵۰,۰۰۰
+                if (n >= 4350000 && n <= 4450000) {
+                    return 4400000;
                 }
-                // قیمت تومان: بازه 4,300,000 تا 4,500,000
-                if (n >= 4300000 && n <= 4500000) {
-                    foundPrice = true;
-                }
-                // قیمت ریال: بازه 43,000,000 تا 45,000,000
-                if (n >= 43000000 && n <= 45000000) {
-                    foundPrice = true;
+                // بازه ریال: ۴۳,۵۰۰,۰۰۰ تا ۴۴,۵۰۰,۰۰۰
+                if (n >= 43500000 && n <= 44500000) {
+                    return 4400000;
                 }
             }
+        }
+        return 0;
+    }
 
-            if (foundPrice && foundDisc) return true;
-            if (foundPrice) return true; // اولویت قیمت ۴.۴ میلیون
+    // -------------------------------------------------------------------------
+    // Target Matcher Logic: زوم انحصاری روی تخفیف ۹۰٪ + قیمت ۴,۴۰۰,۰۰۰ تومان
+    // -------------------------------------------------------------------------
+    function isMatchingTargetDeal(card, title) {
+        const disc = getCardDiscountPercent(card);
+        const price = getCardPrice(card);
+
+        // لاگ کمکی در کنسول
+        if (disc > 0 || price > 0) {
+            console.log(`[Sniper Monitor] "${(title || '').slice(0, 30)}..." => تخفیف: ${disc}% | قیمت: ${price}`);
         }
 
-        // پشتیبانی ثانویه: اگر همچنان کالا با عنوان s26 بود
-        const hasS26 = /s\s*26|s26|اس\s*۲۶|اس۲۶/.test(norm);
-        if (hasS26) {
-            const isAccessory = /قاب|کاور|گلس|محافظ|شارژر|کابل|هولدر|استند|کیف|بند|هندزفری|هدفون|باتری|آداپتور/.test(norm);
-            if (!isAccessory) {
-                return true;
-            }
+        // شرط قطعی و حیاتی:
+        // ۱. درصد تخفیف حتماً باید ۹۰٪ باشد (۸۹ تا ۹۲ درصد)
+        // ۲. قیمت حتماً باید ۴ میلیون و ۴۰۰ هزار تومان باشد
+        // به هیچ وجه کالاهای با تخفیف ۶۴٪، ۷۰٪ و... قبول نخواهند شد!
+        const is90Discount = (disc >= 89 && disc <= 92);
+        const is44Price = (price === 4400000);
+
+        if (is90Discount && is44Price) {
+            console.log(`🎯 [SNIPER MATCH!] کالای هدف ۹۰٪ پیدا شد: تخفیف=${disc}%، قیمت=${price}`);
+            return true;
         }
 
         return false;
@@ -164,11 +204,10 @@
             const cards = Array.from(document.querySelectorAll('a[href*="/product/snp-"]'));
 
             for (const card of cards) {
-                const text = card.textContent || '';
                 const titleEl = card.querySelector('h2, h3, h4, p, [class*="title"]') || card;
                 const title = titleEl.textContent || '';
 
-                if (isMatchingTargetDeal(title, text)) {
+                if (isMatchingTargetDeal(card, title)) {
                     dealFound = true;
                     playAlertSound(1500);
                     showBanner('🚨 کالای ۹۰٪ تخفیف (۴,۴۰۰,۰۰۰ تومان) پیدا شد! انتقال فوری به خرید...', 'linear-gradient(90deg, #16a34a, #15803d)');
@@ -192,7 +231,8 @@
         function automateListPage() {
             if (dealFound) return;
 
-            showBanner(`🔥 اسنایپر ۴.۴ میلیون (تخفیف ۹۰٪) فعال است: اسکرول عمیق ۲ برابری و رفرش هر ۱۰ ثانیه...`);
+            const pageLabel = isDoe3z0 ? 'صفحه ویژه Doe3z0' : 'لیست محصولات';
+            showBanner(`🔥 اسنایپر ${pageLabel} فعال است: رصد بج تخفیف ۹۰٪ + قیمت ۴.۴ میلیون (اسکرول عمیق و رفرش هر ۱۰ ثانیه)...`);
 
             // ۱. اسکرول عمیق و پرشتاب به پایین (۲ برابر مقدار استاندارد) برای باز کردن فوری لایه‌های لیزی‌لود
             scrollStep++;
@@ -214,15 +254,47 @@
     }
 
     // =========================================================================
-    // مرحله ۱: صفحه کالا — افزودن به سبد خرید
+    // مرحله ۱: صفحه کالا — راستی‌آزمایی ایمنی تخفیف + افزودن به سبد خرید
     // =========================================================================
     if (window.location.pathname.startsWith('/product/') && (isQuickBuy || isSniper)) {
         playAlertSound(880);
-        showBanner('مرحله ۱/۴: افزودن خودکار کالا به سبد خرید...');
+        showBanner('مرحله ۱/۴: بررسی اطلاعات کالا و افزودن خودکار به سبد خرید...');
+
+        // استخراج درصد تخفیف در صفحه کالا جهت جلوگیری از خطای خرید کالاهای نامربوط
+        function getPDPDiscountPercent() {
+            const allEls = Array.from(document.querySelectorAll('*'));
+            for (const el of allEls) {
+                if (el.children.length === 0) {
+                    const raw = (el.textContent || '').trim();
+                    if (raw.includes('%') || raw.includes('٪')) {
+                        const norm = normalizeDigits(raw).replace(/\s+/g, '');
+                        const m = norm.match(/^[%٪]?(\d{1,2})[%٪]?$/);
+                        if (m) {
+                            const val = parseInt(m[1], 10);
+                            if (val > 0 && val <= 100) return val;
+                        }
+                    }
+                }
+            }
+            return 0;
+        }
 
         let clicked = false;
         function tryAddToCart() {
             if (clicked) return;
+
+            // راستی‌آزمایی ایمنی: اگر تخفیف کالا کمتر از ۸۸٪ باشد (مثلاً ۶۴٪ کتاب یا ۷۰٪)، خرید فوراً لغو می‌شود!
+            if (isSniper) {
+                const pdpDisc = getPDPDiscountPercent();
+                if (pdpDisc > 0 && (pdpDisc < 88 || pdpDisc > 95)) {
+                    clicked = true;
+                    sessionStorage.removeItem('snapp_sniper');
+                    sessionStorage.removeItem('snapp_quick_buy');
+                    showBanner(`⚠️ توقف اضطراری: تخفیف این کالا ${pdpDisc}٪ است (تخفیف ۹۰٪ نیست)! خرید لغو شد.`, 'linear-gradient(90deg, #b91c1c, #7f1d1d)');
+                    return;
+                }
+            }
+
             const btn = findByText(['افزودن به سبد خرید', 'افزودن به سبد'])
                      || document.querySelector('[data-cro-id="pdp-add-to-cart"]');
             if (btn) {
