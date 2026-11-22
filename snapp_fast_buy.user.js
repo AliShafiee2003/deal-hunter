@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fast Buy 1-Click for SnappShop (Complete Auto-Checkout to Bank Gateway)
 // @namespace    https://snappshop.ir/
-// @version      4.5
-// @description  اسنایپر هوشمند Galaxy S26: رصد مداوم لیست کالاها با اسکرول عمیق ۲ برابری لیزی‌لود و رفرش هر ۱۰ ثانیه، افزودن خودکار به سبد، ثبت سفارش، انتخاب سریعترین ارسال و اتصال مستقیم به درگاه بانکی
+// @version      5.0
+// @description  اسنایپر متمرکز بر قیمت و تخفیف: رصد خودکار کالای ۹۰٪ تخفیف با قیمت ۴ میلیون و ۴۰۰ هزار تومان، اسکرول عمیق لیزی‌لود و رفرش هر ۱۰ ثانیه، افزودن به سبد، ثبت سفارش، انتخاب سریعترین ارسال و اتصال مستقیم به درگاه بانکی
 // @match        https://snappshop.ir/*
 // @match        https://www.snappshop.ir/*
 // @run-at       document-start
@@ -14,11 +14,11 @@
 
     const urlParams = new URLSearchParams(window.location.search);
     const isQuickBuy = urlParams.get('quick_buy') === '1' || sessionStorage.getItem('snapp_quick_buy') === '1';
-    const isS26Sniper = urlParams.get('sniper') === 's26' || sessionStorage.getItem('snapp_s26_sniper') === '1';
+    const isSniper = urlParams.get('sniper') === 'deal440' || urlParams.get('sniper') === 's26' || sessionStorage.getItem('snapp_sniper') === '1';
     const isProductListPage = window.location.pathname.startsWith('/product-list/');
 
-    if (isS26Sniper) sessionStorage.setItem('snapp_s26_sniper', '1');
-    if (isQuickBuy)  sessionStorage.setItem('snapp_quick_buy', '1');
+    if (isSniper)   sessionStorage.setItem('snapp_sniper', '1');
+    if (isQuickBuy) sessionStorage.setItem('snapp_quick_buy', '1');
 
     // -------------------------------------------------------------------------
     // Audio Chime
@@ -56,7 +56,7 @@
             if (document.body) attach(); else document.addEventListener('DOMContentLoaded', attach);
         }
         banner.style.background = bgColor;
-        banner.innerHTML = '🎯 [اسنایپر Galaxy S26] ' + message;
+        banner.innerHTML = '🎯 [اسنایپر شکار آفر ویژه ۹۰٪] ' + message;
     }
 
     // -------------------------------------------------------------------------
@@ -65,22 +65,72 @@
     function normalizeDigits(str) {
         return (str || '')
             .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
-            .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧۸۹'.indexOf(d));
+            .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
     }
 
     // -------------------------------------------------------------------------
-    // S26 Matcher Logic
+    // Target Matcher Logic: زوم روی قیمت ۴,۴۰۰,۰۰۰ با تخفیف ۹۰٪
     // -------------------------------------------------------------------------
-    function isMatchingS26(title, text) {
-        const full = normalizeDigits((title + ' ' + text).toLowerCase());
-        const hasS26 = /s\s*26|s26|اس\s*۲۶|اس۲۶/.test(full);
-        if (!hasS26) return false;
+    function isMatchingTargetDeal(title, text) {
+        const norm = normalizeDigits(text).toLowerCase();
+        const unpunctuated = norm.replace(/[,،\s]/g, '');
 
-        // Reject accessories
-        const isAccessory = /قاب|کاور|گلس|محافظ|شارژر|کابل|هولدر|استند|کیف|بند|هندزفری|هدفون|باتری|آداپتور/.test(full);
-        if (isAccessory) return false;
+        // ۱. بررسی تخفیف ۹۰ درصدی (یا حوالی ۸۵ تا ۹۵ درصد)
+        const has90Discount = /90%|90٪|٪90|%90|91%|89%|88%|92%/.test(norm) ||
+                              /تخفیف\s*90|90\s*درصد/.test(norm);
 
-        return true;
+        // ۲. بررسی قیمت ۴ میلیون و ۴۰۰ هزار تومان (4,400,000)
+        // ممکن است به تومان: 4400000 یا به ریال: 44000000 نوشته شده باشد
+        const has44Price = unpunctuated.includes('4400000') ||
+                           unpunctuated.includes('44000000') ||
+                           /\b4400000\b|\b44000000\b/.test(unpunctuated) ||
+                           /4\s*میلیون\s*و\s*400/.test(norm);
+
+        // اگر هم قیمت ۴.۴ میلیون بود و هم تخفیف ۹۰٪، دقیقاً همان است!
+        if (has44Price && has90Discount) {
+            return true;
+        }
+
+        // اگر قیمت ۴.۴ میلیون بود و نشانه تخفیف هم داشت
+        if (has44Price && (norm.includes('تخفیف') || norm.includes('%') || norm.includes('٪'))) {
+            return true;
+        }
+
+        // بررسی بر اساس استخراج تمام اعداد متن
+        const numbers = norm.replace(/,/g, '').match(/\d{5,10}/g);
+        if (numbers) {
+            let foundPrice = false;
+            let foundDisc = has90Discount;
+
+            for (const numStr of numbers) {
+                let n = parseInt(numStr, 10);
+                if (n === 90 || (n >= 88 && n <= 95 && numStr.length <= 2)) {
+                    foundDisc = true;
+                }
+                // قیمت تومان: بازه 4,300,000 تا 4,500,000
+                if (n >= 4300000 && n <= 4500000) {
+                    foundPrice = true;
+                }
+                // قیمت ریال: بازه 43,000,000 تا 45,000,000
+                if (n >= 43000000 && n <= 45000000) {
+                    foundPrice = true;
+                }
+            }
+
+            if (foundPrice && foundDisc) return true;
+            if (foundPrice) return true; // اولویت قیمت ۴.۴ میلیون
+        }
+
+        // پشتیبانی ثانویه: اگر همچنان کالا با عنوان s26 بود
+        const hasS26 = /s\s*26|s26|اس\s*۲۶|اس۲۶/.test(norm);
+        if (hasS26) {
+            const isAccessory = /قاب|کاور|گلس|محافظ|شارژر|کابل|هولدر|استند|کیف|بند|هندزفری|هدفون|باتری|آداپتور/.test(norm);
+            if (!isAccessory) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // -------------------------------------------------------------------------
@@ -101,16 +151,16 @@
     }
 
     // =========================================================================
-    // مرحله ۰: پایش ویژه لیست محصولات (product-list/Doe3z0)
-    // اسکرول مداوم برای Lazy-Load + رفرش خودکار هر ۱۰ ثانیه (پیوسته و نامحدود)
+    // مرحله ۰: پایش ویژه لیست محصولات (product-list/*)
+    // اسکرول عمیق ۲ برابری برای Lazy-Load + رفرش خودکار هر ۱۰ ثانیه
     // =========================================================================
     if (isProductListPage) {
-        let s26Found = false;
+        let dealFound = false;
         const pageLoadTs = Date.now();
         let scrollStep = 0;
 
         function scanProductCards() {
-            if (s26Found) return;
+            if (dealFound) return;
             const cards = Array.from(document.querySelectorAll('a[href*="/product/snp-"]'));
 
             for (const card of cards) {
@@ -118,52 +168,35 @@
                 const titleEl = card.querySelector('h2, h3, h4, p, [class*="title"]') || card;
                 const title = titleEl.textContent || '';
 
-                if (isMatchingS26(title, text)) {
-                    const normText = normalizeDigits(text).replace(/,/g, '');
-                    const priceMatches = normText.match(/\d{7,10}/g);
-                    let validPrice = false;
+                if (isMatchingTargetDeal(title, text)) {
+                    dealFound = true;
+                    playAlertSound(1500);
+                    showBanner('🚨 کالای ۹۰٪ تخفیف (۴,۴۰۰,۰۰۰ تومان) پیدا شد! انتقال فوری به خرید...', 'linear-gradient(90deg, #16a34a, #15803d)');
 
-                    if (priceMatches) {
-                        for (const pStr of priceMatches) {
-                            let p = parseInt(pStr, 10);
-                            if (p > 100000000) p = p / 10;
-                            if (p >= 20000000 && p <= 30000000) {
-                                validPrice = true;
-                                break;
-                            }
-                        }
+                    let targetHref = card.getAttribute('href') || '';
+                    if (!targetHref.startsWith('http')) {
+                        targetHref = 'https://snappshop.ir' + targetHref;
                     }
-
-                    if (validPrice || /26\s*000\s*000|۲۶\s*۰۰۰\s*۰۰۰/.test(text)) {
-                        s26Found = true;
-                        playAlertSound(1500);
-                        showBanner('🚨 گلکسی S26 پیدا شد! ورود فوری به چرخه خرید سریع...');
-
-                        let targetHref = card.getAttribute('href') || '';
-                        if (!targetHref.startsWith('http')) {
-                            targetHref = 'https://snappshop.ir' + targetHref;
-                        }
-                        const sep = targetHref.includes('?') ? '&' : '?';
-                        window.location.href = targetHref + sep + 'quick_buy=1&sniper=s26';
-                        return;
-                    }
+                    const sep = targetHref.includes('?') ? '&' : '?';
+                    window.location.href = targetHref + sep + 'quick_buy=1&sniper=deal440';
+                    return;
                 }
             }
         }
 
-        const scanIv = setInterval(scanProductCards, 50);
+        const scanIv = setInterval(scanProductCards, 40);
         new MutationObserver(scanProductCards).observe(document.documentElement, { childList: true, subtree: true });
         window.addEventListener('scroll', scanProductCards, { passive: true });
 
         // اتوماسیون مداوم اسکرول و رفرش هر ۱۰ ثانیه
         function automateListPage() {
-            if (s26Found) return;
+            if (dealFound) return;
 
-            showBanner(`🔥 اسنایپر مداوم فعال است: اسکرول عمیق ۲ برابری لیزی‌لود و رفرش هر ۱۰ ثانیه...`);
+            showBanner(`🔥 اسنایپر ۴.۴ میلیون (تخفیف ۹۰٪) فعال است: اسکرول عمیق ۲ برابری و رفرش هر ۱۰ ثانیه...`);
 
-            // ۱. اسکرول عمیق و پرشتاب به پایین (۲ برابر مقدار قبلی) برای باز کردن فوری تمام لایه‌های لیزی‌لود
+            // ۱. اسکرول عمیق و پرشتاب به پایین (۲ برابر مقدار استاندارد) برای باز کردن فوری لایه‌های لیزی‌لود
             scrollStep++;
-            const scrollPositions = [1800, 3600, 6500, 10000, document.body.scrollHeight];
+            const scrollPositions = [2000, 4500, 8000, 12000, document.body.scrollHeight];
             const targetY = scrollPositions[scrollStep % scrollPositions.length] || document.body.scrollHeight;
             window.scrollTo({ top: targetY, behavior: 'smooth' });
 
@@ -171,7 +204,7 @@
             const elapsed = Date.now() - pageLoadTs;
             if (elapsed >= 10000) {
                 scanProductCards();
-                if (!s26Found) {
+                if (!dealFound) {
                     window.location.reload();
                 }
             }
@@ -183,7 +216,7 @@
     // =========================================================================
     // مرحله ۱: صفحه کالا — افزودن به سبد خرید
     // =========================================================================
-    if (window.location.pathname.startsWith('/product/') && (isQuickBuy || isS26Sniper)) {
+    if (window.location.pathname.startsWith('/product/') && (isQuickBuy || isSniper)) {
         playAlertSound(880);
         showBanner('مرحله ۱/۴: افزودن خودکار کالا به سبد خرید...');
 
@@ -211,7 +244,7 @@
     // =========================================================================
     // مرحله ۲: صفحه سبد — کلیک ثبت سفارش
     // =========================================================================
-    if (window.location.pathname === '/checkout/cart' && (isQuickBuy || isS26Sniper)) {
+    if (window.location.pathname === '/checkout/cart' && (isQuickBuy || isSniper)) {
         playAlertSound(980);
         showBanner('مرحله ۲/۴: ثبت سفارش...');
 
@@ -244,7 +277,7 @@
     // ۳. کلیک اولین ساعت در دسترس (۱۱ الی ۱۴ و...)
     // ۴. کلیک دکمه «تایید و ادامه»
     // =========================================================================
-    if (window.location.pathname.includes('/checkout/shipping') && (isQuickBuy || isS26Sniper)) {
+    if (window.location.pathname.includes('/checkout/shipping') && (isQuickBuy || isSniper)) {
         playAlertSound(1100);
         showBanner('مرحله ۳/۴: در حال هماهنگی زمان ارسال (Shipping)...');
 
@@ -359,7 +392,7 @@
     // =========================================================================
     // مرحله ۴: صفحه پرداخت — کلیک «پرداخت از طریق درگاه بانکی»
     // =========================================================================
-    if (window.location.pathname.includes('/checkout/payment') && (isQuickBuy || isS26Sniper)) {
+    if (window.location.pathname.includes('/checkout/payment') && (isQuickBuy || isSniper)) {
         playAlertSound(1200);
         showBanner('مرحله ۴/۴: در حال انتقال به درگاه بانکی شاپرک...');
 
@@ -376,7 +409,7 @@
             if (btn && !btn.disabled && !btn.classList.contains('disabled')) {
                 done = true;
                 sessionStorage.removeItem('snapp_quick_buy');
-                sessionStorage.removeItem('snapp_s26_sniper');
+                sessionStorage.removeItem('snapp_sniper');
                 btn.click();
                 playAlertSound(1760);
                 showBanner('🚀 در حال اتصال به درگاه بانکی شاپرک! لطفا رمز پویا را وارد فرمایید.',

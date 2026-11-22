@@ -770,6 +770,26 @@ func NormalizePersianDigits(s string) string {
 	return persianDigitReplacer.Replace(s)
 }
 
+// IsTarget90PercentDeal checks if an item is the 90% discount 4.4M deal or a Galaxy S26 phone.
+func IsTarget90PercentDeal(title string, priceToman int64, discountPercent int) bool {
+	actualToman := priceToman
+	if actualToman > 100000000 {
+		actualToman = actualToman / 10
+	}
+
+	// زوم اختصاصی روی قیمت ۴ میلیون و ۴۰۰ هزار تومان با تخفیف ۹۰٪
+	if actualToman >= 4300000 && actualToman <= 4500000 {
+		if discountPercent >= 85 {
+			return true
+		}
+		if actualToman == 4400000 {
+			return true
+		}
+	}
+
+	return IsGalaxyS26Phone(title, priceToman)
+}
+
 // IsGalaxyS26Phone determines whether a product is a genuine Samsung Galaxy S26 phone between 20M and 30M Tomans (e.g. 26M).
 func IsGalaxyS26Phone(title string, priceToman int64) bool {
 	// 1. Price check: Must be > 20,000,000 Toman and <= 30,000,000 Toman (specifically checks 26,000,000)
@@ -992,7 +1012,7 @@ func (s *ServerState) searchSnappCategoryForS26(category string, page int, sort 
 				FoundTimeStr:    now.Format("15:04:05"),
 			}
 
-			if IsGalaxyS26Phone(it.Title, priceToman) {
+			if IsTarget90PercentDeal(it.Title, priceToman, disc) {
 				s.TriggerS26Sniper(deal)
 			}
 		}
@@ -1115,7 +1135,7 @@ func (s *ServerState) searchSnappForS26(query string, hasDiscount bool) {
 			FoundTimeStr:    now.Format("15:04:05"),
 		}
 
-		if IsGalaxyS26Phone(it.Title, priceToman) {
+		if IsTarget90PercentDeal(it.Title, priceToman, disc) {
 			s.TriggerS26Sniper(deal)
 		}
 	}
