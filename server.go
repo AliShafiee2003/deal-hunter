@@ -770,21 +770,27 @@ func NormalizePersianDigits(s string) string {
 	return persianDigitReplacer.Replace(s)
 }
 
-// IsTarget90PercentDeal checks if an item has strictly 90% discount (89-92%) AND is priced 4.4M Tomans.
+// IsTarget90PercentDeal checks if an item matches EITHER target deal:
+// هدف ۱: تخفیف ۸۹–۹۲٪ AND قیمت ≈ ۴,۴۰۰,۰۰۰ تومان
+// هدف ۲: تخفیف ۸۸–۹۱٪ AND قیمت ≈ ۸۰۰,۰۰۰ تومان
 func IsTarget90PercentDeal(title string, priceToman int64, discountPercent int) bool {
 	actualToman := priceToman
 	if actualToman > 100000000 {
 		actualToman = actualToman / 10
 	}
 
-	// شرط قطعی ۱: درصد تخفیف حتماً باید ۹۰٪ باشد (بازه ۸۹ تا ۹۲ درصد)
-	if discountPercent < 89 || discountPercent > 92 {
-		return false
+	// ===== هدف ۱: تخفیف ۹۰٪ + قیمت ۴.۴ میلیون تومان =====
+	if discountPercent >= 89 && discountPercent <= 92 {
+		if actualToman >= 4350000 && actualToman <= 4450000 {
+			return true
+		}
 	}
 
-	// شرط قطعی ۲: قیمت حتماً باید ۴ میلیون و ۴۰۰ هزار تومان باشد (بازه ۴.۳۵ تا ۴.۴۵ میلیون)
-	if actualToman >= 4350000 && actualToman <= 4450000 {
-		return true
+	// ===== هدف ۲: تخفیف ۸۸–۹۱٪ + قیمت ۸۰۰ هزار تومان =====
+	if discountPercent >= 88 && discountPercent <= 91 {
+		if actualToman >= 760000 && actualToman <= 840000 {
+			return true
+		}
 	}
 
 	return false

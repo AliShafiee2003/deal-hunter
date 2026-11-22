@@ -117,29 +117,43 @@
 
     // -------------------------------------------------------------------------
     // استخراج دقیق قیمت نهایی فروش از کارت محصول
-    // بررسی ۴,۴۰۰,۰۰۰ تومان (یا معادل ریال ۴۴,۰۰۰,۰۰۰)
+    // هدف ۱: ۴,۴۰۰,۰۰۰ تومان | هدف ۲: ۸۰۰,۰۰۰ تومان
     // -------------------------------------------------------------------------
     function getCardPrice(card) {
         const raw = normalizeDigits(card.textContent || '');
         const clean = raw.replace(/[,،\s]/g, '');
 
-        // ۱. تطابق مستقیم ۴,۴۰۰,۰۰۰ تومان یا ۴۴,۰۰۰,۰۰۰ ریال
+        // ===== هدف ۱: ۴,۴۰۰,۰۰۰ تومان =====
         if (clean.includes('4400000') || clean.includes('44000000')) {
             return 4400000;
         }
 
-        // ۲. بررسی تمام اعداد ۶ رقمی به بالا
-        const numbers = clean.match(/\d{6,10}/g);
+        // ===== هدف ۲: ۸۰۰,۰۰۰ تومان =====
+        // مستقیم ۸۰۰,۰۰۰ تومان یا ۸,۰۰۰,۰۰۰ ریال
+        if (clean.includes('800000') || clean.includes('8000000')) {
+            return 800000;
+        }
+
+        // بررسی تمام اعداد ۵ رقمی به بالا
+        const numbers = clean.match(/\d{5,10}/g);
         if (numbers) {
             for (const numStr of numbers) {
                 const n = parseInt(numStr, 10);
-                // بازه تومان: ۴,۳۵۰,۰۰۰ تا ۴,۴۵۰,۰۰۰
+                // بازه هدف ۱ — تومان: ۴,۳۵۰,۰۰۰ تا ۴,۴۵۰,۰۰۰
                 if (n >= 4350000 && n <= 4450000) {
                     return 4400000;
                 }
-                // بازه ریال: ۴۳,۵۰۰,۰۰۰ تا ۴۴,۵۰۰,۰۰۰
+                // بازه هدف ۱ — ریال: ۴۳,۵۰۰,۰۰۰ تا ۴۴,۵۰۰,۰۰۰
                 if (n >= 43500000 && n <= 44500000) {
                     return 4400000;
+                }
+                // بازه هدف ۲ — تومان: ۷۸۰,۰۰۰ تا ۸۲۰,۰۰۰
+                if (n >= 780000 && n <= 820000) {
+                    return 800000;
+                }
+                // بازه هدف ۲ — ریال: ۷,۸۰۰,۰۰۰ تا ۸,۲۰۰,۰۰۰
+                if (n >= 7800000 && n <= 8200000) {
+                    return 800000;
                 }
             }
         }
@@ -147,30 +161,32 @@
     }
 
     // -------------------------------------------------------------------------
-    // Target Matcher Logic: زوم انحصاری روی تخفیف ۹۰٪ + قیمت ۴,۴۰۰,۰۰۰ تومان
+    // Target Matcher Logic:
+    // هدف ۱ — تخفیف ۹۰٪ (۸۹–۹۲٪) + قیمت ۴,۴۰۰,۰۰۰ تومان
+    // هدف ۲ — تخفیف ۸۸–۹۱٪ + قیمت ۸۰۰,۰۰۰ تومان
     // -------------------------------------------------------------------------
     function isMatchingTargetDeal(card, title) {
         const disc = getCardDiscountPercent(card);
         const price = getCardPrice(card);
 
-        // لاگ کمکی در کنسول
+        // لاگ کمکی در کنسول (فقط اگر داده‌ای وجود داشت)
         if (disc > 0 || price > 0) {
             console.log(`[Sniper Monitor] "${(title || '').slice(0, 30)}..." => تخفیف: ${disc}% | قیمت: ${price}`);
         }
 
-        // شرط قطعی و حیاتی:
-        // ۱. درصد تخفیف حتماً باید ۹۰٪ باشد (۸۹ تا ۹۲ درصد)
-        // ۲. قیمت حتماً باید ۴ میلیون و ۴۰۰ هزار تومان باشد
-        // به هیچ وجه کالاهای با تخفیف ۶۴٪، ۷۰٪ و... قبول نخواهند شد!
-        const is90Discount = (disc >= 89 && disc <= 92);
-        const is44Price = (price === 4400000);
-
-        if (is90Discount && is44Price) {
-            console.log(`🎯 [SNIPER MATCH!] کالای هدف ۹۰٪ پیدا شد: تخفیف=${disc}%، قیمت=${price}`);
-            return true;
+        // ===== هدف ۱: تخفیف ۹۰٪ + ۴.۴ میلیون تومان =====
+        if (disc >= 89 && disc <= 92 && price === 4400000) {
+            console.log(`🎯 [MATCH - هدف ۱] تخفیف=${disc}%، قیمت=${price} تومان`);
+            return { matched: true, label: '۴,۴۰۰,۰۰۰ تومان' };
         }
 
-        return false;
+        // ===== هدف ۲: تخفیف ۸۸–۹۱٪ + ۸۰۰ هزار تومان =====
+        if (disc >= 88 && disc <= 91 && price === 800000) {
+            console.log(`🎯 [MATCH - هدف ۲] تخفیف=${disc}%، قیمت=${price} تومان`);
+            return { matched: true, label: '۸۰۰,۰۰۰ تومان' };
+        }
+
+        return { matched: false, label: '' };
     }
 
     // -------------------------------------------------------------------------
@@ -207,10 +223,11 @@
                 const titleEl = card.querySelector('h2, h3, h4, p, [class*="title"]') || card;
                 const title = titleEl.textContent || '';
 
-                if (isMatchingTargetDeal(card, title)) {
+                const result = isMatchingTargetDeal(card, title);
+                if (result.matched) {
                     dealFound = true;
                     playAlertSound(1500);
-                    showBanner('🚨 کالای ۹۰٪ تخفیف (۴,۴۰۰,۰۰۰ تومان) پیدا شد! انتقال فوری به خرید...', 'linear-gradient(90deg, #16a34a, #15803d)');
+                    showBanner(`🚨 کالای هدف (${result.label}) با تخفیف ویژه پیدا شد! انتقال فوری به خرید...`, 'linear-gradient(90deg, #16a34a, #15803d)');
 
                     let targetHref = card.getAttribute('href') || '';
                     if (!targetHref.startsWith('http')) {
@@ -283,14 +300,18 @@
         function tryAddToCart() {
             if (clicked) return;
 
-            // راستی‌آزمایی ایمنی: اگر تخفیف کالا کمتر از ۸۸٪ باشد (مثلاً ۶۴٪ کتاب یا ۷۰٪)، خرید فوراً لغو می‌شود!
+            // ===== راستی‌آزمایی ایمنی برای هر دو هدف =====
+            // هدف ۱: تخفیف ۸۹–۹۲٪ | هدف ۲: تخفیف ۸۸–۹۱٪
+            // اگر تخفیف کالا خارج از هر دو بازه باشد (مثلاً ۶۴٪ کتاب)، خرید لغو می‌شود
             if (isSniper) {
                 const pdpDisc = getPDPDiscountPercent();
-                if (pdpDisc > 0 && (pdpDisc < 88 || pdpDisc > 95)) {
+                const isValidDisc = pdpDisc === 0 // هنوز لود نشده، صبر می‌کنیم
+                    || (pdpDisc >= 88 && pdpDisc <= 92); // بازه معتبر هر دو هدف
+                if (pdpDisc > 0 && !isValidDisc) {
                     clicked = true;
                     sessionStorage.removeItem('snapp_sniper');
                     sessionStorage.removeItem('snapp_quick_buy');
-                    showBanner(`⚠️ توقف اضطراری: تخفیف این کالا ${pdpDisc}٪ است (تخفیف ۹۰٪ نیست)! خرید لغو شد.`, 'linear-gradient(90deg, #b91c1c, #7f1d1d)');
+                    showBanner(`⚠️ توقف اضطراری: تخفیف این کالا ${pdpDisc}٪ است (خارج از بازه ۸۸–۹۲٪)! خرید لغو شد.`, 'linear-gradient(90deg, #b91c1c, #7f1d1d)');
                     return;
                 }
             }
