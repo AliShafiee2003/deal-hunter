@@ -753,8 +753,59 @@ func (s *ServerState) mergeFetchedBatch(items []DealItem) {
 
 // --- Run Scan for Both Stores ---
 func (s *ServerState) RunScan() {
-	// اختصاص ۱۰۰٪ منابع به اسنایپر Galaxy S26 - پایش عمومی کاملاً غیرفعال است
-	s.ScanForGalaxyS26()
+	s.mu.Lock()
+	if s.isScanning {
+		s.mu.Unlock()
+		return
+	}
+	s.isScanning = true
+	s.mu.Unlock()
+
+	defer func() {
+		s.SaveCache()
+		s.mu.Lock()
+		s.isScanning = false
+		s.lastScanTime = time.Now()
+		s.scanCount++
+		s.mu.Unlock()
+	}()
+
+	// اجرای موازی اسنایپر در کنار اسکن سراسری
+	go s.ScanForGalaxyS26()
+
+	var wg sync.WaitGroup
+
+	for _, target := range TargetConfigs {
+		// Snapp goroutine
+		if target.SnappCat != "" || target.SnappQuery != "" || target.Key == "all" {
+			wg.Add(1)
+			go func(t CrawlTarget) {
+				defer wg.Done()
+				snappSem <- struct{}{}
+				defer func() { <-snappSem }()
+				items, err := s.FetchSnappTarget(t)
+				if err == nil && len(items) > 0 {
+					s.mergeFetchedBatch(items)
+				}
+			}(target)
+		}
+
+		// Digikala goroutine
+		if target.DkCatID > 0 || target.DkQuery != "" {
+			wg.Add(1)
+			go func(t CrawlTarget) {
+				defer wg.Done()
+				dkSem <- struct{}{}
+				defer func() { <-dkSem }()
+				items, err := s.FetchDigikalaTarget(t)
+				if err == nil && len(items) > 0 {
+					s.mergeFetchedBatch(items)
+				}
+			}(target)
+		}
+	}
+
+	wg.Wait()
 }
 
 // --- Galaxy S26 Dedicated Sniper Engine ---
@@ -1178,8 +1229,25 @@ func (s *ServerState) TriggerS26Sniper(deal DealItem) {
 func (s *ServerState) StartBackgroundCrawler() {
 	s.LoadCache()
 	s.StartS26Sniper()
-	// Background crawl is currently PAUSED per user request ("فعلا درخواست زدن رو متوقف کن").
-	// Only the scheduled S26 Sniper will run in its exact window (21:23 to 21:40).
+
+	go func() {
+		// اجرای بلافاصله اولین دور اسکن زنده
+		time.Sleep(1 * time.Second)
+		fmt.Println("🚀 شروع اسکن زنده و دریافت تازه‌ترین تخفیف‌ها از اسنپ‌شاپ و دیجی‌کالا...")
+		s.RunScan()
+
+		interval := s.intervalSec
+		if interval < 30 {
+			interval = 60
+		}
+		ticker := time.NewTicker(time.Duration(interval) * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			fmt.Println("🔄 اجرای دور جدید اسکن دوره‌ای...")
+			s.RunScan()
+		}
+	}()
 }
 
 func (s *ServerState) GetDeals(minDisc int, catKey, storeKey string) []DealItem {
